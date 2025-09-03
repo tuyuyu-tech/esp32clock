@@ -3,7 +3,14 @@
     "allow": [
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(gh:*)",
+      "Bash(winget install:*)",
+      "Bash(curl:*)",
+      "Bash(powershell:*)",
+      "Bash(./bin/gh.exe:*)"
     ],
     "deny": [],
     "ask": []

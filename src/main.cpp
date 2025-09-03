@@ -3,8 +3,6 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <WiFi.h>
-#include <time.h>
 #include <esp_timer.h>
 
 // BLE UUID定義 (Web側と合わせる)
@@ -128,32 +126,20 @@ void setup() {
 }
 
 void loop() {
-    // BLE接続状態監視
+    // 接続状態監視のみ
     static unsigned long lastCheck = 0;
-    if (millis() - lastCheck > 5000) {
+    if (millis() - lastCheck > 10000) {
         if (deviceConnected) {
-            Serial.printf("Stats: Total=%d, Within5ms=%d (%.1f%%), AvgError=%.2fms, MaxError=%.2fms\n",
-                         stats.total_commands,
-                         stats.commands_within_5ms,
-                         stats.total_commands > 0 ? (100.0 * stats.commands_within_5ms / stats.total_commands) : 0,
-                         stats.total_commands > 0 ? (stats.total_error / stats.total_commands) : 0,
-                         stats.max_error);
+            Serial.printf("Connected. Total commands: %d\n", stats.total_commands);
         }
         lastCheck = millis();
     }
-    
-    delay(100);
+    delay(500);
 }
 
 void setupWiFiTime() {
-    // 内蔵RTCの初期設定
-    // 実際の運用では WiFi.begin() で接続してNTP同期
-    struct timeval tv;
-    tv.tv_sec = 1609459200; // 2021-01-01 00:00:00 UTC (初期値)
-    tv.tv_usec = 0;
-    settimeofday(&tv, NULL);
-    
-    Serial.println("Time initialized (use WiFi NTP for accuracy)");
+    // 簡易時刻初期化
+    Serial.println("Time initialized");
 }
 
 void setupBLE() {
@@ -191,9 +177,7 @@ void setupBLE() {
 }
 
 int64_t getCurrentTimeMs() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000;
+    return millis();
 }
 
 void handleTimeSync(uint8_t* data, size_t length) {
