@@ -80,11 +80,10 @@ class MyServerCallbacks: public BLEServerCallbacks {
 
 class CommandCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
-        std::string value = pCharacteristic->getValue();
-        uint8_t* data = (uint8_t*)value.data();
-        size_t length = value.length();
+        uint8_t* data = pCharacteristic->getData();
+        size_t length = pCharacteristic->getValue().length();
         
-        if (length > 0) {
+        if (length > 0 && data != nullptr) {
             uint8_t command = data[0];
             
             switch (command) {
