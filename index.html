@@ -24,22 +24,12 @@
             <div class="sync-section">
                 <h3>時刻同期</h3>
                 <div class="sync-controls">
-                    <button id="serialSyncBtn" class="btn primary">1. USB-C高精度同期</button>
-                    <button id="syncTimeBtn" class="btn" disabled>2. BLE測定開始</button>
-                    <button id="wifiSyncBtn" class="btn" disabled>WiFi時刻同期</button>
-                    <span id="syncStatus">まずUSB-C同期を実行</span>
+                    <button id="syncTimeBtn" class="btn primary">BLE時刻同期</button>
+                    <span id="syncStatus">BLE接続後に同期開始</span>
                 </div>
                 <div class="sync-info">
                     <span>同期オフセット: <span id="timeOffset">--</span>ms</span>
                     <span>最終同期: <span id="lastSync">--</span></span>
-                </div>
-                <div class="offset-controls">
-                    <label>手動オフセット調整:
-                        <input type="number" id="manualOffset" value="0" step="0.1" min="-1000" max="1000">
-                        <span>ms</span>
-                        <button id="applyOffsetBtn" class="btn small">適用</button>
-                        <button id="resetOffsetBtn" class="btn small">リセット</button>
-                    </label>
                 </div>
             </div>
 

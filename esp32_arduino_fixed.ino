@@ -2,8 +2,6 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <WiFi.h>
-#include <time.h>
 
 // BLE UUID定義
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
@@ -17,11 +15,6 @@
 // プロトコル定義
 #define CMD_TIME_SYNC  0x01
 #define CMD_MOTOR_CMD  0x02
-#define CMD_WIFI_SYNC  0x03
-
-// WiFi設定（必要に応じて変更）
-const char* ssid = "your_wifi_ssid";      // WiFi SSID
-const char* password = "your_wifi_password";  // WiFi パスワード
 
 // BLE変数
 BLEServer* pServer = nullptr;
@@ -33,77 +26,12 @@ bool deviceConnected = false;
 // 統計用（簡素化）
 uint32_t totalCommands = 0;
 
-// ===== 関数定義（クラスより前に配置）=====
-void handleWiFiSync(uint8_t* data, size_t length) {
-    Serial.println("WiFi時刻同期を開始...");
-    
-    // WiFi接続試行
-    if (WiFi.status() != WL_CONNECTED) {
-        WiFi.begin(ssid, password);
-        
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(500);
-            Serial.print(".");
-            attempts++;
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("\nWiFi接続成功");
-            Serial.print("IP: ");
-            Serial.println(WiFi.localIP());
-        } else {
-            Serial.println("\nWiFi接続失敗");
-            
-            // 失敗応答
-            uint8_t response[2] = {CMD_WIFI_SYNC, 0}; // 0 = 失敗
-            if (deviceConnected && pResponseCharacteristic) {
-                pResponseCharacteristic->setValue(response, 2);
-                pResponseCharacteristic->notify();
-            }
-            return;
-        }
-    }
-    
-    // NTP時刻同期
-    configTime(9 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // JST (UTC+9)
-    
-    struct tm timeinfo;
-    int attempts = 0;
-    while (!getLocalTime(&timeinfo) && attempts < 10) {
-        delay(1000);
-        Serial.println("NTP時刻取得中...");
-        attempts++;
-    }
-    
-    if (getLocalTime(&timeinfo)) {
-        Serial.println("NTP時刻同期成功");
-        Serial.printf("現在時刻: %04d/%02d/%02d %02d:%02d:%02d\n",
-                     timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        
-        // 成功応答
-        uint8_t response[2] = {CMD_WIFI_SYNC, 1}; // 1 = 成功
-        if (deviceConnected && pResponseCharacteristic) {
-            pResponseCharacteristic->setValue(response, 2);
-            pResponseCharacteristic->notify();
-        }
-    } else {
-        Serial.println("NTP時刻同期失敗");
-        
-        // 失敗応答
-        uint8_t response[2] = {CMD_WIFI_SYNC, 0}; // 0 = 失敗
-        if (deviceConnected && pResponseCharacteristic) {
-            pResponseCharacteristic->setValue(response, 2);
-            pResponseCharacteristic->notify();
-        }
-    }
-    
-    // WiFi切断（省電力）
-    WiFi.disconnect();
-    Serial.println("WiFi切断（省電力モード）");
-}
+// 時刻ドリフト測定用
+uint64_t referenceTime = 0;  // 基準時刻（マイクロ秒）
+uint64_t referenceMillis = 0; // 基準millis()
+bool clockCalibratedViaSerial = false;
 
+// ===== 関数定義（クラスより前に配置）=====
 void handleTimeSync(uint8_t* data, size_t length) {
     if (length < 9) return;
     
@@ -203,9 +131,6 @@ class CommandCallbacks: public BLECharacteristicCallbacks {
                 case CMD_MOTOR_CMD:
                     handleMotorCommand(data, length);
                     break;
-                case CMD_WIFI_SYNC:
-                    handleWiFiSync(data, length);
-                    break;
                 default:
                     Serial.printf("Unknown cmd: 0x%02X\n", command);
                     break;
@@ -268,6 +193,15 @@ void loop() {
             // ESP32受信時刻（マイクロ秒精度）
             float t2 = (float)esp_timer_get_time() / 1000.0; // ミリ秒に変換
             
+            // 基準時刻を保存（初回のみ）
+            if (!clockCalibratedViaSerial) {
+                referenceTime = (uint64_t)(webTime * 1000.0); // マイクロ秒
+                referenceMillis = esp_timer_get_time();
+                clockCalibratedViaSerial = true;
+                Serial.printf("Clock calibrated: Web=%.3f, ESP32=%llu\n", 
+                             webTime, referenceMillis / 1000);
+            }
+            
             // 最小限の処理時間
             delayMicroseconds(10);
             
@@ -277,6 +211,57 @@ void loop() {
             // 応答送信（高速）
             Serial.printf("SYNC_ACK:%.3f:%.3f\n", t2, t3);
             Serial.flush(); // 即座に送信
+        }
+        else if (command.startsWith("MOTOR:")) {
+            // 有線モーター制御: MOTOR:sendTime:delayMs:sequence
+            int firstColon = command.indexOf(':', 6);
+            int secondColon = command.indexOf(':', firstColon + 1);
+            
+            if (firstColon != -1 && secondColon != -1) {
+                float sentAt = command.substring(6, firstColon).toFloat();
+                int delayMs = command.substring(firstColon + 1, secondColon).toInt();
+                int sequence = command.substring(secondColon + 1).toInt();
+                
+                float receivedAt = (float)esp_timer_get_time() / 1000.0;
+                
+                // 指定された遅延時間待機
+                if (delayMs > 0 && delayMs < 1000) {
+                    delay(delayMs);
+                }
+                
+                float executedAt = (float)esp_timer_get_time() / 1000.0;
+                
+                // モーター制御
+                digitalWrite(MOTOR_PIN, HIGH);
+                delayMicroseconds(100);
+                digitalWrite(MOTOR_PIN, LOW);
+                
+                // 応答送信
+                Serial.printf("MOTOR_ACK:%.3f:%.3f:%d\n", 
+                             receivedAt, executedAt, sequence);
+                Serial.flush();
+            }
+        }
+        else if (command.equals("DRIFT")) {
+            // 時刻ドリフト測定
+            if (clockCalibratedViaSerial) {
+                uint64_t currentMicros = esp_timer_get_time();
+                uint64_t elapsedMicros = currentMicros - referenceMillis;
+                float elapsedSeconds = elapsedMicros / 1000000.0;
+                
+                // ESP32内部時計の精度測定
+                // esp_timer_get_time()は理論的には1マイクロ秒精度
+                // 実際の時計精度は水晶振動子の精度に依存（通常±20ppm程度）
+                
+                Serial.printf("DRIFT_RESULT:%.3f:%.3f:%.3f:%llu\n", 
+                             elapsedSeconds, 
+                             elapsedMicros / 1000.0,  // 経過ミリ秒
+                             currentMicros / 1000.0,  // 現在時刻（ミリ秒）
+                             elapsedMicros);          // 経過マイクロ秒
+                Serial.flush();
+            } else {
+                Serial.println("DRIFT_ERROR:Not_calibrated");
+            }
         }
     }
     
