@@ -32,6 +32,7 @@ class ESP32TimingTester {
         document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
         document.getElementById('syncTimeBtn').addEventListener('click', () => this.syncTime());
         document.getElementById('startTestBtn').addEventListener('click', () => this.startTest());
+        document.getElementById('startDirectTestBtn').addEventListener('click', () => this.startDirectTest());
         document.getElementById('stopTestBtn').addEventListener('click', () => this.stopTest());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
         document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
@@ -163,6 +164,7 @@ class ESP32TimingTester {
         document.getElementById('disconnectBtn').disabled = true;
         document.getElementById('syncTimeBtn').disabled = true;
         document.getElementById('startTestBtn').disabled = true;
+        document.getElementById('startDirectTestBtn').disabled = true;
         
         this.updateStatus('disconnected', '未接続');
         this.log('デバイスから切断されました', 'info');
@@ -210,6 +212,7 @@ class ESP32TimingTester {
             
             this.updateSyncStatus('BLE同期完了');
             document.getElementById('startTestBtn').disabled = false;
+            document.getElementById('startDirectTestBtn').disabled = false;
             document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
             document.getElementById('lastSync').textContent = this.lastSyncTime.toLocaleTimeString();
             
@@ -287,6 +290,106 @@ class ESP32TimingTester {
         }
         
         this.stopTest();
+    }
+    
+    async startDirectTest() {
+        if (!this.isSynced || this.isTestRunning) return;
+        
+        this.isTestRunning = true;
+        this.currentTestIndex = 0;
+        this.testResults = [];
+        
+        document.getElementById('startTestBtn').disabled = true;
+        document.getElementById('startDirectTestBtn').disabled = true;
+        document.getElementById('stopTestBtn').disabled = false;
+        
+        this.log(`即送信テスト開始: ${this.testSettings.count}回`, 'info');
+        
+        while (this.isTestRunning && this.currentTestIndex < this.testSettings.count) {
+            await this.performDirectTest();
+            this.currentTestIndex++;
+            this.updateProgress();
+            
+            if (this.isTestRunning && this.currentTestIndex < this.testSettings.count) {
+                await this.sleep(this.testSettings.interval);
+            }
+        }
+        
+        this.stopTest();
+    }
+    
+    async performDirectTest() {
+        const sequence = this.currentTestIndex + 1;
+        const sendTime = Date.now();
+        
+        return new Promise((resolve) => {
+            // 遅延なしのコマンド（実行遅延=0）
+            const command = new ArrayBuffer(20);
+            const view = new DataView(command);
+            view.setUint8(0, 0x02); // MOTOR_CMD command
+            view.setUint8(1, 0x01); // motor command
+            view.setBigUint64(2, BigInt(sendTime), true);
+            view.setBigUint64(10, BigInt(0), true); // 遅延なし
+            view.setUint16(18, sequence, true);
+            
+            this.commandCharacteristic.writeValue(command).then(() => {
+                let responseTimer = setTimeout(() => {
+                    this.responseHandler = null;
+                    resolve();
+                }, 2000);
+                
+                this.responseHandler = (data) => {
+                    clearTimeout(responseTimer);
+                    const responseTime = Date.now();
+                    
+                    if (data.byteLength >= 12) {
+                        const responseView = new DataView(data);
+                        const esp32ReceivedAt = responseView.getUint32(2, true);
+                        const esp32ExecutedAt = responseView.getUint32(6, true);
+                        
+                        // ESP32起動時刻を推定（初回のみ）
+                        if (!this.esp32StartTime) {
+                            this.esp32StartTime = sendTime - esp32ReceivedAt;
+                        }
+                        
+                        // ESP32時刻をUnix時刻に変換
+                        const esp32ReceivedAtUnix = this.esp32StartTime + esp32ReceivedAt;
+                        const esp32ExecutedAtUnix = this.esp32StartTime + esp32ExecutedAt;
+                        
+                        const transmissionDelay = esp32ReceivedAtUnix - sendTime;
+                        const processingDelay = esp32ExecutedAt - esp32ReceivedAt; // ESP32内の処理時間
+                        
+                        const testResult = {
+                            sequence: sequence,
+                            sendTime: sendTime,
+                            esp32ReceivedAt: esp32ReceivedAtUnix,
+                            esp32ExecutedAt: esp32ExecutedAtUnix,
+                            responseTime: responseTime,
+                            transmissionDelay: transmissionDelay,
+                            executionError: Math.abs(processingDelay),
+                            rawExecutionError: processingDelay
+                        };
+                        
+                        this.testResults.push(testResult);
+                        this.updateStats();
+                        this.addToChart(testResult.transmissionDelay);
+                        
+                        // 送信遅延誤差を計算（平均からの差）
+                        const transmissionDelays = this.testResults.map(r => r.transmissionDelay);
+                        const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / transmissionDelays.length;
+                        const delayError = avgDelay - testResult.transmissionDelay;
+                        
+                        document.getElementById('currentError').textContent = 
+                            `${delayError.toFixed(2)}ms`;
+                        
+                        this.log(`[${sequence}] 即送信: ${transmissionDelay.toFixed(2)}ms, 処理: ${processingDelay.toFixed(2)}ms`, 
+                                Math.abs(delayError) <= 5 ? 'success' : 'error');
+                    }
+                    
+                    resolve();
+                };
+            });
+        });
     }
     
     async performTest() {
@@ -367,6 +470,7 @@ class ESP32TimingTester {
         this.responseHandler = null;
         
         document.getElementById('startTestBtn').disabled = !this.isSynced;
+        document.getElementById('startDirectTestBtn').disabled = !this.isSynced;
         document.getElementById('stopTestBtn').disabled = true;
         
         if (this.testResults.length > 0) {
