@@ -256,12 +256,40 @@ void setup() {
 }
 
 void loop() {
+    // シリアル時刻同期処理
+    if (Serial.available()) {
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        
+        if (command.startsWith("SYNC:")) {
+            // 高精度時刻同期
+            float webTime = command.substring(5).toFloat();
+            
+            // ESP32受信時刻（マイクロ秒精度）
+            float t2 = (float)esp_timer_get_time() / 1000.0; // ミリ秒に変換
+            
+            // 最小限の処理時間
+            delayMicroseconds(10);
+            
+            // ESP32送信時刻
+            float t3 = (float)esp_timer_get_time() / 1000.0;
+            
+            // 応答送信（高速）
+            Serial.printf("SYNC_ACK:%.3f:%.3f\n", t2, t3);
+            Serial.flush(); // 即座に送信
+        }
+    }
+    
+    // 接続状態監視
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck > 10000) {
         if (deviceConnected) {
-            Serial.printf("Active. Commands: %d\n", totalCommands);
+            Serial.printf("BLE Connected. Total commands: %d\n", totalCommands);
+        } else {
+            Serial.println("BLE Ready. Waiting for connection...");
         }
         lastCheck = millis();
     }
-    delay(500);
+    
+    delay(10); // シリアル応答性向上
 }
