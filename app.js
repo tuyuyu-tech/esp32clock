@@ -42,6 +42,9 @@ class ESP32TimingTester {
         document.getElementById('connectBtn').addEventListener('click', () => this.connect());
         document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
         document.getElementById('syncTimeBtn').addEventListener('click', () => this.syncTime());
+        document.getElementById('wifiSyncBtn').addEventListener('click', () => this.wifiSyncTime());
+        document.getElementById('applyOffsetBtn').addEventListener('click', () => this.applyManualOffset());
+        document.getElementById('resetOffsetBtn').addEventListener('click', () => this.resetOffset());
         document.getElementById('startTestBtn').addEventListener('click', () => this.startTest());
         document.getElementById('stopTestBtn').addEventListener('click', () => this.stopTest());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
@@ -157,6 +160,7 @@ class ESP32TimingTester {
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('disconnectBtn').disabled = false;
             document.getElementById('syncTimeBtn').disabled = false;
+            document.getElementById('wifiSyncBtn').disabled = false;
             
         } catch (error) {
             this.updateStatus('disconnected', '接続失敗');
@@ -187,6 +191,7 @@ class ESP32TimingTester {
         document.getElementById('connectBtn').disabled = false;
         document.getElementById('disconnectBtn').disabled = true;
         document.getElementById('syncTimeBtn').disabled = true;
+        document.getElementById('wifiSyncBtn').disabled = true;
         document.getElementById('startTestBtn').disabled = true;
         
         if (this.isTestRunning) {
@@ -271,6 +276,64 @@ class ESP32TimingTester {
                 };
             });
         });
+    }
+    
+    async wifiSyncTime() {
+        if (!this.commandCharacteristic) return;
+        
+        try {
+            this.updateSyncStatus('WiFi同期中...');
+            this.log('ESP32のWiFi時刻同期を開始します', 'info');
+            
+            // WiFi同期コマンド送信
+            const command = new ArrayBuffer(1);
+            const view = new DataView(command);
+            view.setUint8(0, 0x03); // WIFI_SYNC command
+            
+            await this.commandCharacteristic.writeValue(command);
+            
+            // 応答待ち
+            await new Promise((resolve) => {
+                let responseTimer = setTimeout(() => {
+                    this.responseHandler = null;
+                    resolve();
+                }, 10000); // 10秒待機
+                
+                this.responseHandler = (data) => {
+                    clearTimeout(responseTimer);
+                    this.responseHandler = null;
+                    resolve();
+                };
+            });
+            
+            this.updateSyncStatus('WiFi同期完了');
+            this.log('ESP32のWiFi時刻同期が完了しました', 'success');
+            
+            // BLE同期も実行
+            await this.syncTime();
+            
+        } catch (error) {
+            this.updateSyncStatus('WiFi同期失敗');
+            this.log(`WiFi同期エラー: ${error.message}`, 'error');
+        }
+    }
+    
+    applyManualOffset() {
+        const offsetInput = document.getElementById('manualOffset');
+        const manualOffset = parseFloat(offsetInput.value) || 0;
+        
+        this.timeOffset += manualOffset;
+        document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
+        
+        this.log(`手動オフセット ${manualOffset}ms を適用しました`, 'info');
+    }
+    
+    resetOffset() {
+        this.timeOffset = 0;
+        document.getElementById('manualOffset').value = '0';
+        document.getElementById('timeOffset').textContent = '0.00';
+        
+        this.log('オフセットをリセットしました', 'info');
     }
     
     async startTest() {

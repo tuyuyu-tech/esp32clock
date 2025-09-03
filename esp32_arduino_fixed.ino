@@ -2,6 +2,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <WiFi.h>
+#include <time.h>
 
 // BLE UUID定義
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
@@ -15,6 +17,11 @@
 // プロトコル定義
 #define CMD_TIME_SYNC  0x01
 #define CMD_MOTOR_CMD  0x02
+#define CMD_WIFI_SYNC  0x03
+
+// WiFi設定（必要に応じて変更）
+const char* ssid = "your_wifi_ssid";      // WiFi SSID
+const char* password = "your_wifi_password";  // WiFi パスワード
 
 // BLE変数
 BLEServer* pServer = nullptr;
@@ -27,6 +34,76 @@ bool deviceConnected = false;
 uint32_t totalCommands = 0;
 
 // ===== 関数定義（クラスより前に配置）=====
+void handleWiFiSync(uint8_t* data, size_t length) {
+    Serial.println("WiFi時刻同期を開始...");
+    
+    // WiFi接続試行
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.begin(ssid, password);
+        
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+        }
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nWiFi接続成功");
+            Serial.print("IP: ");
+            Serial.println(WiFi.localIP());
+        } else {
+            Serial.println("\nWiFi接続失敗");
+            
+            // 失敗応答
+            uint8_t response[2] = {CMD_WIFI_SYNC, 0}; // 0 = 失敗
+            if (deviceConnected && pResponseCharacteristic) {
+                pResponseCharacteristic->setValue(response, 2);
+                pResponseCharacteristic->notify();
+            }
+            return;
+        }
+    }
+    
+    // NTP時刻同期
+    configTime(9 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // JST (UTC+9)
+    
+    struct tm timeinfo;
+    int attempts = 0;
+    while (!getLocalTime(&timeinfo) && attempts < 10) {
+        delay(1000);
+        Serial.println("NTP時刻取得中...");
+        attempts++;
+    }
+    
+    if (getLocalTime(&timeinfo)) {
+        Serial.println("NTP時刻同期成功");
+        Serial.printf("現在時刻: %04d/%02d/%02d %02d:%02d:%02d\n",
+                     timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                     timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        
+        // 成功応答
+        uint8_t response[2] = {CMD_WIFI_SYNC, 1}; // 1 = 成功
+        if (deviceConnected && pResponseCharacteristic) {
+            pResponseCharacteristic->setValue(response, 2);
+            pResponseCharacteristic->notify();
+        }
+    } else {
+        Serial.println("NTP時刻同期失敗");
+        
+        // 失敗応答
+        uint8_t response[2] = {CMD_WIFI_SYNC, 0}; // 0 = 失敗
+        if (deviceConnected && pResponseCharacteristic) {
+            pResponseCharacteristic->setValue(response, 2);
+            pResponseCharacteristic->notify();
+        }
+    }
+    
+    // WiFi切断（省電力）
+    WiFi.disconnect();
+    Serial.println("WiFi切断（省電力モード）");
+}
+
 void handleTimeSync(uint8_t* data, size_t length) {
     if (length < 9) return;
     
@@ -125,6 +202,9 @@ class CommandCallbacks: public BLECharacteristicCallbacks {
                     break;
                 case CMD_MOTOR_CMD:
                     handleMotorCommand(data, length);
+                    break;
+                case CMD_WIFI_SYNC:
+                    handleWiFiSync(data, length);
                     break;
                 default:
                     Serial.printf("Unknown cmd: 0x%02X\n", command);
