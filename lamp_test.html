@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ランプ検出テスト</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .video-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        #videoElement {
+            width: 640px;
+            height: 480px;
+            border: 2px solid #ddd;
+        }
+        #canvasOutput {
+            width: 640px;
+            height: 480px;
+            border: 2px solid #ddd;
+            margin-left: 20px;
+        }
+        .video-container {
+            display: flex;
+            gap: 20px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        .btn.primary {
+            background-color: #3498db;
+            color: white;
+        }
+        .btn.danger {
+            background-color: #e74c3c;
+            color: white;
+        }
+        .btn.secondary {
+            background-color: #95a5a6;
+            color: white;
+        }
+        .color-controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .color-control {
+            display: flex;
+            flex-direction: column;
+        }
+        .color-control label {
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        .color-control input {
+            padding: 5px;
+        }
+        .status {
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .detection-info {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ランプ位置検出テスト</h1>
+        <p>色検知によるランプの自動位置検出をテストします</p>
+
+        <div class="controls">
+            <h3>カメラ制御</h3>
+            <button id="startCamera" class="btn primary">カメラ開始</button>
+            <button id="stopCamera" class="btn danger" disabled>カメラ停止</button>
+            <button id="detectLamp" class="btn secondary" disabled>ランプ検出開始</button>
+            <button id="stopDetection" class="btn secondary" disabled>検出停止</button>
+            
+            <div id="status" class="status">カメラを開始してください</div>
+        </div>
+
+        <div class="controls">
+            <h3>色検出設定</h3>
+            <div class="color-controls">
+                <div class="color-control">
+                    <label>色相 最小 (H min)</label>
+                    <input type="range" id="hMin" min="0" max="179" value="0">
+                    <span id="hMinValue">0</span>
+                </div>
+                <div class="color-control">
+                    <label>彩度 最小 (S min)</label>
+                    <input type="range" id="sMin" min="0" max="255" value="50">
+                    <span id="sMinValue">50</span>
+                </div>
+                <div class="color-control">
+                    <label>明度 最小 (V min)</label>
+                    <input type="range" id="vMin" min="0" max="255" value="50">
+                    <span id="vMinValue">50</span>
+                </div>
+                <div class="color-control">
+                    <label>色相 最大 (H max)</label>
+                    <input type="range" id="hMax" min="0" max="179" value="10">
+                    <span id="hMaxValue">10</span>
+                </div>
+                <div class="color-control">
+                    <label>彩度 最大 (S max)</label>
+                    <input type="range" id="sMax" min="0" max="255" value="255">
+                    <span id="sMaxValue">255</span>
+                </div>
+                <div class="color-control">
+                    <label>明度 最大 (V max)</label>
+                    <input type="range" id="vMax" min="0" max="255" value="255">
+                    <span id="vMaxValue">255</span>
+                </div>
+            </div>
+            
+            <div>
+                <label>
+                    <input type="checkbox" id="showMask"> マスク表示
+                </label>
+                <label>
+                    <input type="checkbox" id="showContours" checked> 輪郭表示
+                </label>
+                <label>
+                    最小面積: <input type="number" id="minArea" value="100" min="10" max="10000">
+                </label>
+            </div>
+        </div>
+
+        <div class="video-section">
+            <h3>カメラ映像と検出結果</h3>
+            <div class="video-container">
+                <video id="videoElement" autoplay></video>
+                <canvas id="canvasOutput"></canvas>
+            </div>
+            
+            <div id="detectionInfo" class="detection-info">
+                検出情報がここに表示されます
+            </div>
+        </div>
+    </div>
+
+    <script src="https://docs.opencv.org/4.5.0/opencv.js"></script>
+    <script src="lamp_detector.js"></script>
+</body>
+</html>
