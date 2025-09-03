@@ -10,6 +10,7 @@ class ESP32TimingTester {
         this.isTestRunning = false;
         this.currentTestIndex = 0;
         this.testResults = [];
+        this.esp32StartTime = null;
         this.testSettings = {
             interval: 500,
             executionDelay: 50,
@@ -240,7 +241,10 @@ class ESP32TimingTester {
                     
                     const roundTrip = t4 - t1;
                     const delay = roundTrip / 2;
-                    const offset = ((t2 - t1) + (t3 - t4)) / 2;
+                    
+                    // ESP32のmillis()は相対時間なので、遅延のみ計算
+                    // オフセットは送信遅延として扱う
+                    const offset = delay;
                     
                     resolve({ t1, t2, t3, t4, roundTrip, delay, offset });
                 } else {
@@ -279,7 +283,7 @@ class ESP32TimingTester {
     
     async performTest() {
         const sequence = this.currentTestIndex + 1;
-        const sendTime = Date.now() + this.timeOffset;
+        const sendTime = Date.now();
         
         return new Promise((resolve) => {
             const command = new ArrayBuffer(20);
@@ -305,14 +309,23 @@ class ESP32TimingTester {
                         const esp32ReceivedAt = responseView.getUint32(2, true);
                         const esp32ExecutedAt = responseView.getUint32(6, true);
                         
-                        const transmissionDelay = esp32ReceivedAt - sendTime;
+                        // ESP32起動時刻を推定（初回のみ）
+                        if (!this.esp32StartTime) {
+                            this.esp32StartTime = sendTime - esp32ReceivedAt;
+                        }
+                        
+                        // ESP32時刻をUnix時刻に変換
+                        const esp32ReceivedAtUnix = this.esp32StartTime + esp32ReceivedAt;
+                        const esp32ExecutedAtUnix = this.esp32StartTime + esp32ExecutedAt;
+                        
+                        const transmissionDelay = esp32ReceivedAtUnix - sendTime;
                         const executionError = (esp32ExecutedAt - esp32ReceivedAt) - this.testSettings.executionDelay;
                         
                         const testResult = {
                             sequence: sequence,
                             sendTime: sendTime,
-                            esp32ReceivedAt: esp32ReceivedAt,
-                            esp32ExecutedAt: esp32ExecutedAt,
+                            esp32ReceivedAt: esp32ReceivedAtUnix,
+                            esp32ExecutedAt: esp32ExecutedAtUnix,
                             responseTime: responseTime,
                             transmissionDelay: transmissionDelay,
                             executionError: Math.abs(executionError),
