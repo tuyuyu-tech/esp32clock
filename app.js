@@ -123,11 +123,7 @@ class ESP32TimingTester {
             
             // デバイス選択
             this.device = await navigator.bluetooth.requestDevice({
-                filters: [{
-                    name: 'ESP32-Timer'
-                }, {
-                    services: [ESP32TimingTester.SERVICE_UUID]
-                }],
+                filters: [{ name: 'ESP32-Timer' }],
                 optionalServices: [ESP32TimingTester.SERVICE_UUID]
             });
             
