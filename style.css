@@ -247,6 +247,29 @@ header p {
     align-items: center;
 }
 
+.log-section-compact {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+}
+
+.log-section-compact h4 {
+    margin-bottom: 10px;
+    color: #2c3e50;
+    font-size: 16px;
+    border-left: 3px solid #f39c12;
+    padding-left: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.log-section-compact #logContainer {
+    height: 120px;
+    font-size: 11px;
+}
+
 #logContainer {
     background-color: #1e1e1e;
     color: #00ff00;
