@@ -1,0 +1,508 @@
+// ESP32 BLE タイミングテスター
+// Web Bluetooth API使用
+
+class ESP32TimingTester {
+    constructor() {
+        // BLE接続関連
+        this.device = null;
+        this.server = null;
+        this.service = null;
+        this.commandCharacteristic = null;
+        this.responseCharacteristic = null;
+        
+        // 時刻同期関連
+        this.timeOffset = 0;
+        this.lastSyncTime = null;
+        this.isSynced = false;
+        
+        // テスト関連
+        this.testResults = [];
+        this.isTestRunning = false;
+        this.currentTestIndex = 0;
+        this.testSettings = {
+            count: 50,
+            interval: 100,
+            executionDelay: 50
+        };
+        
+        // Chart.js
+        this.chart = null;
+        
+        this.initializeUI();
+        this.initializeChart();
+    }
+    
+    // UUIDの定義（ESP32と合わせる）
+    static get SERVICE_UUID() { return '12345678-1234-1234-1234-123456789abc'; }
+    static get COMMAND_CHARACTERISTIC_UUID() { return '12345678-1234-1234-1234-123456789abd'; }
+    static get RESPONSE_CHARACTERISTIC_UUID() { return '12345678-1234-1234-1234-123456789abe'; }
+    
+    initializeUI() {
+        // ボタンイベント
+        document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+        document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
+        document.getElementById('syncTimeBtn').addEventListener('click', () => this.syncTime());
+        document.getElementById('startTestBtn').addEventListener('click', () => this.startTest());
+        document.getElementById('stopTestBtn').addEventListener('click', () => this.stopTest());
+        document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
+        document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
+        document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
+        
+        // 設定変更
+        document.getElementById('testCount').addEventListener('change', (e) => {
+            this.testSettings.count = parseInt(e.target.value);
+        });
+        document.getElementById('testInterval').addEventListener('change', (e) => {
+            this.testSettings.interval = parseInt(e.target.value);
+        });
+        document.getElementById('executionDelay').addEventListener('change', (e) => {
+            this.testSettings.executionDelay = parseInt(e.target.value);
+        });
+        
+        // 初期状態
+        this.updateStatus('disconnected', '未接続');
+        this.updateSyncStatus('同期待ち');
+    }
+    
+    initializeChart() {
+        const ctx = document.getElementById('errorChart').getContext('2d');
+        this.chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '実行誤差 (ms)',
+                    data: [],
+                    borderColor: '#e74c3c',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    tension: 0.1,
+                    pointRadius: 2
+                }, {
+                    label: '送信遅延 (ms)',
+                    data: [],
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    tension: 0.1,
+                    pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: 'サンプル番号'
+                        }
+                    },
+                    y: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: '誤差 (ms)'
+                        },
+                        min: -10,
+                        max: 50
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true
+                    }
+                },
+                animation: false
+            }
+        });
+    }
+    
+    async connect() {
+        try {
+            this.updateStatus('connecting', '接続中...');
+            this.log('BLE接続を開始します', 'info');
+            
+            // デバイス選択
+            this.device = await navigator.bluetooth.requestDevice({
+                filters: [{
+                    services: [ESP32TimingTester.SERVICE_UUID]
+                }]
+            });
+            
+            // 切断イベント
+            this.device.addEventListener('gattserverdisconnected', () => {
+                this.onDisconnected();
+            });
+            
+            // GATT接続
+            this.server = await this.device.gatt.connect();
+            this.service = await this.server.getPrimaryService(ESP32TimingTester.SERVICE_UUID);
+            
+            // Characteristics取得
+            this.commandCharacteristic = await this.service.getCharacteristic(
+                ESP32TimingTester.COMMAND_CHARACTERISTIC_UUID
+            );
+            this.responseCharacteristic = await this.service.getCharacteristic(
+                ESP32TimingTester.RESPONSE_CHARACTERISTIC_UUID
+            );
+            
+            // 通知有効化
+            await this.responseCharacteristic.startNotifications();
+            this.responseCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                this.onResponseReceived(event);
+            });
+            
+            this.updateStatus('connected', '接続済み');
+            this.log(`デバイス "${this.device.name}" に接続しました`, 'success');
+            
+            // UI更新
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+            document.getElementById('syncTimeBtn').disabled = false;
+            
+        } catch (error) {
+            this.updateStatus('disconnected', '接続失敗');
+            this.log(`接続エラー: ${error.message}`, 'error');
+        }
+    }
+    
+    async disconnect() {
+        if (this.device && this.device.gatt.connected) {
+            this.device.gatt.disconnect();
+        }
+        this.onDisconnected();
+    }
+    
+    onDisconnected() {
+        this.device = null;
+        this.server = null;
+        this.service = null;
+        this.commandCharacteristic = null;
+        this.responseCharacteristic = null;
+        this.isSynced = false;
+        
+        this.updateStatus('disconnected', '未接続');
+        this.updateSyncStatus('同期待ち');
+        this.log('デバイスから切断しました', 'info');
+        
+        // UI更新
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = true;
+        document.getElementById('syncTimeBtn').disabled = true;
+        document.getElementById('startTestBtn').disabled = true;
+        
+        if (this.isTestRunning) {
+            this.stopTest();
+        }
+    }
+    
+    async syncTime() {
+        if (!this.commandCharacteristic) return;
+        
+        try {
+            this.updateSyncStatus('同期中...');
+            this.log('時刻同期を開始します', 'info');
+            
+            const samples = [];
+            const numSamples = 20;
+            
+            for (let i = 0; i < numSamples; i++) {
+                const sample = await this.performTimeSync();
+                if (sample && sample.roundTrip < 50) { // 50ms以下の良好なサンプル
+                    samples.push(sample);
+                }
+                await this.sleep(100);
+            }
+            
+            if (samples.length < 5) {
+                throw new Error('十分なサンプルが取得できませんでした');
+            }
+            
+            // 中央値を採用
+            const offsets = samples.map(s => s.offset).sort((a, b) => a - b);
+            this.timeOffset = offsets[Math.floor(offsets.length / 2)];
+            
+            this.isSynced = true;
+            this.lastSyncTime = new Date();
+            
+            this.updateSyncStatus('同期完了');
+            document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
+            document.getElementById('lastSync').textContent = this.lastSyncTime.toLocaleTimeString();
+            document.getElementById('startTestBtn').disabled = false;
+            
+            this.log(`時刻同期完了: オフセット ${this.timeOffset.toFixed(2)}ms`, 'success');
+            
+        } catch (error) {
+            this.updateSyncStatus('同期失敗');
+            this.log(`時刻同期エラー: ${error.message}`, 'error');
+        }
+    }
+    
+    async performTimeSync() {
+        return new Promise((resolve) => {
+            const t1 = Date.now();
+            
+            // 時刻同期リクエスト
+            const request = new ArrayBuffer(12);
+            const view = new DataView(request);
+            view.setUint8(0, 0x01); // TIME_SYNC command
+            view.setBigUint64(1, BigInt(t1), true); // little endian
+            
+            this.commandCharacteristic.writeValue(request).then(() => {
+                // 応答待ち (タイムアウト付き)
+                let responseTimer = setTimeout(() => {
+                    this.responseHandler = null;
+                    resolve(null);
+                }, 1000);
+                
+                this.responseHandler = (data) => {
+                    clearTimeout(responseTimer);
+                    const t4 = Date.now();
+                    
+                    const responseView = new DataView(data);
+                    const t2 = Number(responseView.getBigUint64(1, true));
+                    const t3 = Number(responseView.getBigUint64(9, true));
+                    
+                    const roundTrip = t4 - t1;
+                    const processing = t3 - t2;
+                    const networkDelay = (roundTrip - processing) / 2;
+                    const offset = ((t2 - t1) + (t3 - t4)) / 2;
+                    
+                    resolve({
+                        offset: offset,
+                        delay: networkDelay,
+                        roundTrip: roundTrip
+                    });
+                };
+            });
+        });
+    }
+    
+    async startTest() {
+        if (!this.isSynced || this.isTestRunning) return;
+        
+        this.isTestRunning = true;
+        this.currentTestIndex = 0;
+        this.testResults = [];
+        
+        document.getElementById('startTestBtn').disabled = true;
+        document.getElementById('stopTestBtn').disabled = false;
+        document.getElementById('clearBtn').disabled = true;
+        
+        this.log(`テスト開始: ${this.testSettings.count}回, ${this.testSettings.interval}ms間隔`, 'info');
+        
+        try {
+            for (let i = 0; i < this.testSettings.count && this.isTestRunning; i++) {
+                this.currentTestIndex = i + 1;
+                await this.performTimingTest(i);
+                
+                this.updateProgress();
+                this.updateStatistics();
+                this.updateChart();
+                
+                if (i < this.testSettings.count - 1) {
+                    await this.sleep(this.testSettings.interval);
+                }
+            }
+        } catch (error) {
+            this.log(`テストエラー: ${error.message}`, 'error');
+        } finally {
+            this.stopTest();
+        }
+    }
+    
+    async performTimingTest(sequence) {
+        return new Promise((resolve) => {
+            const sendTime = Date.now();
+            const targetTime = sendTime + this.testSettings.executionDelay;
+            
+            // コマンド送信
+            const command = new ArrayBuffer(20);
+            const view = new DataView(command);
+            view.setUint8(0, 0x02); // MOTOR_CMD command
+            view.setUint8(1, 0x01); // motor command
+            view.setBigUint64(2, BigInt(sendTime), true);
+            view.setBigUint64(10, BigInt(targetTime), true);
+            view.setUint16(18, sequence, true);
+            
+            this.commandCharacteristic.writeValue(command).then(() => {
+                // 応答待ち
+                let responseTimer = setTimeout(() => {
+                    this.responseHandler = null;
+                    resolve();
+                }, 2000);
+                
+                this.responseHandler = (data) => {
+                    clearTimeout(responseTimer);
+                    const responseView = new DataView(data);
+                    
+                    const receivedAt = Number(responseView.getBigUint64(2, true));
+                    const executedAt = Number(responseView.getBigUint64(10, true));
+                    
+                    const transmissionDelay = receivedAt - sendTime;
+                    const executionError = executedAt - targetTime;
+                    
+                    const result = {
+                        sequence: sequence,
+                        sentAt: sendTime,
+                        receivedAt: receivedAt,
+                        executedAt: executedAt,
+                        targetTime: targetTime,
+                        transmissionDelay: transmissionDelay,
+                        executionError: executionError
+                    };
+                    
+                    this.testResults.push(result);
+                    
+                    this.log(`[${sequence}] 送信遅延: ${transmissionDelay.toFixed(2)}ms, 実行誤差: ${executionError.toFixed(2)}ms`, 
+                             Math.abs(executionError) <= 5 ? 'success' : 'error');
+                    
+                    resolve();
+                };
+            });
+        });
+    }
+    
+    stopTest() {
+        this.isTestRunning = false;
+        this.responseHandler = null;
+        
+        document.getElementById('startTestBtn').disabled = !this.isSynced;
+        document.getElementById('stopTestBtn').disabled = true;
+        document.getElementById('clearBtn').disabled = false;
+        
+        if (this.testResults.length > 0) {
+            this.log(`テスト完了: ${this.testResults.length}サンプル`, 'success');
+        }
+    }
+    
+    clearResults() {
+        this.testResults = [];
+        this.currentTestIndex = 0;
+        this.updateProgress();
+        this.updateStatistics();
+        this.updateChart();
+        this.log('結果をクリアしました', 'info');
+    }
+    
+    onResponseReceived(event) {
+        if (this.responseHandler) {
+            const data = event.target.value.buffer;
+            this.responseHandler(data);
+            this.responseHandler = null;
+        }
+    }
+    
+    updateProgress() {
+        const progress = document.getElementById('progress');
+        const progressFill = document.getElementById('progressFill');
+        
+        progress.textContent = `${this.currentTestIndex}/${this.testSettings.count}`;
+        const percentage = (this.currentTestIndex / this.testSettings.count) * 100;
+        progressFill.style.width = `${percentage}%`;
+    }
+    
+    updateStatistics() {
+        if (this.testResults.length === 0) {
+            document.getElementById('sampleCount').textContent = '0';
+            document.getElementById('avgDelay').textContent = '--';
+            document.getElementById('avgError').textContent = '--';
+            document.getElementById('maxError').textContent = '--';
+            document.getElementById('within5ms').textContent = '--';
+            document.getElementById('currentError').textContent = '--';
+            return;
+        }
+        
+        const delays = this.testResults.map(r => r.transmissionDelay);
+        const errors = this.testResults.map(r => Math.abs(r.executionError));
+        
+        const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+        const avgError = errors.reduce((a, b) => a + b, 0) / errors.length;
+        const maxError = Math.max(...errors);
+        const within5ms = errors.filter(e => e <= 5).length;
+        const within5msPercent = (within5ms / errors.length) * 100;
+        
+        document.getElementById('sampleCount').textContent = this.testResults.length;
+        document.getElementById('avgDelay').textContent = `${avgDelay.toFixed(2)}ms`;
+        document.getElementById('avgError').textContent = `${avgError.toFixed(2)}ms`;
+        document.getElementById('maxError').textContent = `${maxError.toFixed(2)}ms`;
+        document.getElementById('within5ms').textContent = `${within5ms}/${errors.length} (${within5msPercent.toFixed(1)}%)`;
+        
+        if (this.testResults.length > 0) {
+            const lastError = Math.abs(this.testResults[this.testResults.length - 1].executionError);
+            document.getElementById('currentError').textContent = `${lastError.toFixed(2)}ms`;
+        }
+    }
+    
+    updateChart() {
+        const maxPoints = 50;
+        const recentResults = this.testResults.slice(-maxPoints);
+        
+        this.chart.data.labels = recentResults.map((_, i) => i + 1);
+        this.chart.data.datasets[0].data = recentResults.map(r => Math.abs(r.executionError));
+        this.chart.data.datasets[1].data = recentResults.map(r => r.transmissionDelay);
+        
+        this.chart.update('none');
+    }
+    
+    exportCSV() {
+        if (this.testResults.length === 0) return;
+        
+        let csv = 'Sequence,Sent At,Received At,Executed At,Target Time,Transmission Delay (ms),Execution Error (ms)\n';
+        
+        this.testResults.forEach(result => {
+            csv += `${result.sequence},${result.sentAt},${result.receivedAt},${result.executedAt},${result.targetTime},${result.transmissionDelay.toFixed(3)},${result.executionError.toFixed(3)}\n`;
+        });
+        
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = `timing_results_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        
+        this.log('CSV ファイルをエクスポートしました', 'success');
+    }
+    
+    updateStatus(status, text) {
+        const statusElement = document.getElementById('status');
+        statusElement.textContent = text;
+        statusElement.className = status;
+    }
+    
+    updateSyncStatus(text) {
+        document.getElementById('syncStatus').textContent = text;
+    }
+    
+    log(message, type = 'info') {
+        const logContainer = document.getElementById('logContainer');
+        const timestamp = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type}`;
+        entry.textContent = `[${timestamp}] ${message}`;
+        
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+    
+    clearLog() {
+        document.getElementById('logContainer').innerHTML = '';
+    }
+    
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+}
+
+// 初期化
+document.addEventListener('DOMContentLoaded', () => {
+    // Web Bluetooth API サポートチェック
+    if (!navigator.bluetooth) {
+        alert('このブラウザーはWeb Bluetooth APIをサポートしていません。Chrome/Edge等のChromiumベースブラウザーをお使いください。');
+        return;
+    }
+    
+    new ESP32TimingTester();
+});
