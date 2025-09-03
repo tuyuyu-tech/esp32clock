@@ -332,24 +332,58 @@ class ESP32TimingTester {
                     const responseView = new DataView(data);
                     const responseTime = Date.now();
                     
-                    // 単純な遅延計算
-                    const transmissionDelay = responseTime - sendTime;
-                    const executionError = transmissionDelay - this.testSettings.executionDelay;
-                    
-                    const result = {
-                        sequence: sequence,
-                        sentAt: sendTime,
-                        receivedAt: responseTime,
-                        executedAt: responseTime,
-                        targetTime: targetTime,
-                        transmissionDelay: transmissionDelay,
-                        executionError: executionError
-                    };
-                    
-                    this.testResults.push(result);
-                    
-                    this.log(`[${sequence}] 遅延: ${transmissionDelay.toFixed(2)}ms, 誤差: ${executionError.toFixed(2)}ms`, 
-                             Math.abs(executionError) <= 5 ? 'success' : 'error');
+                    if (data.byteLength >= 12) {
+                        // ESP32からの詳細データを解析
+                        const esp32ReceivedAt = responseView.getUint32(2, true);  // ESP32受信時刻
+                        const esp32ExecutedAt = responseView.getUint32(6, true);  // ESP32実行時刻
+                        
+                        // ESP32の起動時刻を推定（初回のみ）
+                        if (!this.esp32StartTime) {
+                            this.esp32StartTime = sendTime - esp32ReceivedAt;
+                        }
+                        
+                        // 送信遅延 = ESP32受信時刻 - 送信時刻（時刻差を考慮）
+                        const actualReceivedAt = this.esp32StartTime + esp32ReceivedAt;
+                        const transmissionDelay = actualReceivedAt - sendTime;
+                        
+                        // 実行誤差 = 実際の遅延 - 期待値
+                        const actualDelay = esp32ExecutedAt - esp32ReceivedAt;
+                        const executionError = actualDelay - this.testSettings.executionDelay;
+                        
+                        const result = {
+                            sequence: sequence,
+                            sentAt: sendTime,
+                            receivedAt: actualReceivedAt,
+                            executedAt: this.esp32StartTime + esp32ExecutedAt,
+                            targetTime: targetTime,
+                            transmissionDelay: transmissionDelay,
+                            executionError: executionError,
+                            esp32ReceivedAt: esp32ReceivedAt,
+                            esp32ExecutedAt: esp32ExecutedAt
+                        };
+                        
+                        this.testResults.push(result);
+                        
+                        this.log(`[${sequence}] 送信遅延: ${transmissionDelay.toFixed(2)}ms, 実行誤差: ${executionError.toFixed(2)}ms`, 
+                                 Math.abs(transmissionDelay) <= 30 ? 'success' : 'error');
+                    } else {
+                        // フォールバック（旧形式）
+                        const transmissionDelay = responseTime - sendTime;
+                        const executionError = transmissionDelay - this.testSettings.executionDelay;
+                        
+                        const result = {
+                            sequence: sequence,
+                            sentAt: sendTime,
+                            receivedAt: responseTime,
+                            executedAt: responseTime,
+                            targetTime: targetTime,
+                            transmissionDelay: transmissionDelay,
+                            executionError: executionError
+                        };
+                        
+                        this.testResults.push(result);
+                        this.log(`[${sequence}] 往復遅延: ${transmissionDelay.toFixed(2)}ms`, 'info');
+                    }
                     
                     resolve();
                 };

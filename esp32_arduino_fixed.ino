@@ -78,15 +78,16 @@ void handleMotorCommand(uint8_t* data, size_t length) {
     delayMicroseconds(100);
     digitalWrite(MOTOR_PIN, LOW);
     
-    // 簡単な応答（タイムスタンプなし）
-    uint8_t response[4];
+    // 受信・実行時刻を含む応答
+    uint8_t response[12];
     response[0] = CMD_MOTOR_CMD;
     response[1] = motorCmd;
-    response[2] = sequence & 0xFF;
-    response[3] = (sequence >> 8) & 0xFF;
+    memcpy(response + 2, &receivedAt, 4);  // 受信時刻（4バイト）
+    memcpy(response + 6, &executedAt, 4);  // 実行時刻（4バイト）
+    memcpy(response + 10, &sequence, 2);   // シーケンス番号
     
     if (deviceConnected && pResponseCharacteristic) {
-        pResponseCharacteristic->setValue(response, 4);
+        pResponseCharacteristic->setValue(response, 12);
         pResponseCharacteristic->notify();
     }
     
