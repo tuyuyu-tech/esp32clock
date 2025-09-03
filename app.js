@@ -61,7 +61,15 @@ class ESP32TimingTester {
             data: {
                 labels: [],
                 datasets: [{
-                    label: '実行誤差 (ms)',
+                    label: '送信遅延 (ms)',
+                    data: [],
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    pointRadius: 2
+                }, {
+                    label: '遅延誤差 (ms)',
                     data: [],
                     borderColor: '#e74c3c',
                     backgroundColor: 'rgba(231, 76, 60, 0.1)',
@@ -91,7 +99,7 @@ class ESP32TimingTester {
                 plugins: {
                     title: {
                         display: true,
-                        text: 'リアルタイム実行誤差'
+                        text: 'リアルタイム送信遅延と誤差'
                     }
                 }
             }
@@ -334,13 +342,18 @@ class ESP32TimingTester {
                         
                         this.testResults.push(testResult);
                         this.updateStats();
-                        this.addToChart(testResult.executionError);
+                        this.addToChart(testResult.transmissionDelay);
+                        
+                        // 送信遅延誤差を計算（平均からの差）
+                        const transmissionDelays = this.testResults.map(r => r.transmissionDelay);
+                        const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / transmissionDelays.length;
+                        const delayError = avgDelay - testResult.transmissionDelay;
                         
                         document.getElementById('currentError').textContent = 
-                            `${testResult.executionError.toFixed(2)}ms`;
+                            `${delayError.toFixed(2)}ms`;
                         
-                        this.log(`[${sequence}] 誤差: ${executionError.toFixed(2)}ms`, 
-                                Math.abs(executionError) <= 5 ? 'success' : 'error');
+                        this.log(`[${sequence}] 送信遅延: ${transmissionDelay.toFixed(2)}ms, 誤差: ${delayError.toFixed(2)}ms`, 
+                                Math.abs(delayError) <= 5 ? 'success' : 'error');
                     }
                     
                     resolve();
@@ -372,28 +385,39 @@ class ESP32TimingTester {
         if (results.length === 0) return;
         
         const transmissionDelays = results.map(r => r.transmissionDelay);
-        const executionErrors = results.map(r => r.executionError);
-        
         const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / results.length;
-        const avgError = executionErrors.reduce((a, b) => a + b, 0) / results.length;
-        const maxError = Math.max(...executionErrors);
-        const within5ms = results.filter(r => r.executionError <= 5).length;
-        const within5msPercent = (within5ms / results.length) * 100;
+        
+        // 送信遅延誤差を計算（平均からの差の絶対値）
+        const delayErrors = transmissionDelays.map(delay => Math.abs(avgDelay - delay));
+        const avgDelayError = delayErrors.reduce((a, b) => a + b, 0) / delayErrors.length;
+        const maxDelayError = Math.max(...delayErrors);
+        const within5ms = delayErrors.filter(error => error <= 5).length;
+        const within5msPercent = (within5ms / delayErrors.length) * 100;
         
         document.getElementById('sampleCount').textContent = results.length;
         document.getElementById('avgDelay').textContent = `${avgDelay.toFixed(2)}ms`;
-        document.getElementById('avgError').textContent = `${avgError.toFixed(2)}ms`;
-        document.getElementById('maxError').textContent = `${maxError.toFixed(2)}ms`;
+        document.getElementById('avgError').textContent = `${avgDelayError.toFixed(2)}ms`;
+        document.getElementById('maxError').textContent = `${maxDelayError.toFixed(2)}ms`;
         document.getElementById('within5ms').textContent = `${within5msPercent.toFixed(1)}%`;
     }
     
-    addToChart(error) {
-        this.chart.data.labels.push(this.testResults.length);
-        this.chart.data.datasets[0].data.push(error);
+    addToChart(transmissionDelay) {
+        const results = this.testResults;
+        const transmissionDelays = results.map(r => r.transmissionDelay);
+        const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / results.length;
         
-        if (this.chart.data.labels.length > 100) {
+        // 誤差 = 平均送信遅延 - 今回の送信遅延
+        const delayError = avgDelay - transmissionDelay;
+        
+        this.chart.data.labels.push(this.testResults.length);
+        this.chart.data.datasets[0].data.push(transmissionDelay); // 送信遅延
+        this.chart.data.datasets[1].data.push(delayError);        // 遅延誤差
+        
+        // 最新50回分のみ表示
+        if (this.chart.data.labels.length > 50) {
             this.chart.data.labels.shift();
             this.chart.data.datasets[0].data.shift();
+            this.chart.data.datasets[1].data.shift();
         }
         
         this.chart.update('none');
@@ -403,6 +427,7 @@ class ESP32TimingTester {
         this.testResults = [];
         this.chart.data.labels = [];
         this.chart.data.datasets[0].data = [];
+        this.chart.data.datasets[1].data = [];
         this.chart.update();
         
         document.getElementById('sampleCount').textContent = '0';
