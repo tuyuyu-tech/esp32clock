@@ -207,12 +207,17 @@ class ESP32TimingTester {
     async syncTime() {
         if (!this.commandCharacteristic) return;
         
+        if (!this.isSynced) {
+            this.log('まず USB-C高精度同期を実行してください', 'error');
+            return;
+        }
+        
         try {
-            this.updateSyncStatus('同期中...');
-            this.log('時刻同期を開始します', 'info');
+            this.updateSyncStatus('BLE遅延測定中...');
+            this.log('BLE送信遅延測定を開始します（USB-C基準時刻使用）', 'info');
             
             const samples = [];
-            const numSamples = 20;
+            const numSamples = 10;
             
             for (let i = 0; i < numSamples; i++) {
                 const sample = await this.performTimeSync();
@@ -222,27 +227,26 @@ class ESP32TimingTester {
                 await this.sleep(100);
             }
             
-            if (samples.length < 5) {
+            if (samples.length < 3) {
                 throw new Error('十分なサンプルが取得できませんでした');
             }
             
-            // 中央値を採用
-            const offsets = samples.map(s => s.offset).sort((a, b) => a - b);
-            this.timeOffset = offsets[Math.floor(offsets.length / 2)];
+            // 遅延統計を計算（オフセットは変更しない）
+            const delays = samples.map(s => s.delay);
+            const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+            const maxDelay = Math.max(...delays);
+            const minDelay = Math.min(...delays);
             
-            this.isSynced = true;
-            this.lastSyncTime = new Date();
-            
-            this.updateSyncStatus('同期完了');
-            document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
-            document.getElementById('lastSync').textContent = this.lastSyncTime.toLocaleTimeString();
+            this.updateSyncStatus('BLE測定完了');
             document.getElementById('startTestBtn').disabled = false;
             
-            this.log(`時刻同期完了: オフセット ${this.timeOffset.toFixed(2)}ms`, 'success');
+            this.log(`BLE遅延測定完了: 平均 ${avgDelay.toFixed(2)}ms (${minDelay.toFixed(2)}-${maxDelay.toFixed(2)}ms)`, 'success');
+            this.log(`測定サンプル: ${samples.length}/${numSamples}`, 'info');
+            this.log(`基準時刻: USB-C同期済み (${this.timeOffset.toFixed(2)}ms)`, 'info');
             
         } catch (error) {
-            this.updateSyncStatus('同期失敗');
-            this.log(`時刻同期エラー: ${error.message}`, 'error');
+            this.updateSyncStatus('BLE測定失敗');
+            this.log(`BLE測定エラー: ${error.message}`, 'error');
         }
     }
     
@@ -403,13 +407,17 @@ class ESP32TimingTester {
                 this.isSynced = true;
                 this.lastSyncTime = new Date();
                 
-                this.updateSyncStatus('USB-C同期完了');
+                this.updateSyncStatus('USB-C基準時刻設定完了');
                 document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
                 document.getElementById('lastSync').textContent = this.lastSyncTime.toLocaleTimeString();
-                document.getElementById('startTestBtn').disabled = false;
                 
-                this.log(`USB-C同期完了: 精度 ±0.1ms, オフセット ${this.timeOffset.toFixed(2)}ms`, 'success');
-                this.log(`有効サンプル: ${samples.length}/${10}`, 'info');
+                // BLE測定を有効化
+                document.getElementById('syncTimeBtn').disabled = false;
+                document.getElementById('syncTimeBtn').textContent = '2. BLE測定開始';
+                
+                this.log(`USB-C基準同期完了: 精度 ±0.1ms, オフセット ${this.timeOffset.toFixed(2)}ms`, 'success');
+                this.log(`有効サンプル: ${samples.length}/10`, 'info');
+                this.log('次：BLE接続してBLE測定を開始してください', 'info');
             } else {
                 throw new Error('有効なサンプルが取得できませんでした');
             }

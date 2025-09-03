@@ -24,10 +24,10 @@
             <div class="sync-section">
                 <h3>時刻同期</h3>
                 <div class="sync-controls">
-                    <button id="syncTimeBtn" class="btn" disabled>BLE時刻同期</button>
+                    <button id="serialSyncBtn" class="btn primary">1. USB-C高精度同期</button>
+                    <button id="syncTimeBtn" class="btn" disabled>2. BLE測定開始</button>
                     <button id="wifiSyncBtn" class="btn" disabled>WiFi時刻同期</button>
-                    <button id="serialSyncBtn" class="btn">USB-C時刻同期</button>
-                    <span id="syncStatus">同期待ち</span>
+                    <span id="syncStatus">まずUSB-C同期を実行</span>
                 </div>
                 <div class="sync-info">
                     <span>同期オフセット: <span id="timeOffset">--</span>ms</span>
