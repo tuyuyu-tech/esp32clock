@@ -26,6 +26,10 @@ bool deviceConnected = false;
 // 統計用（簡素化）
 uint32_t totalCommands = 0;
 
+// 関数宣言
+void handleTimeSync(uint8_t* data, size_t length);
+void handleMotorCommand(uint8_t* data, size_t length);
+
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
