@@ -33,8 +33,9 @@ void handleTimeSync(uint8_t* data, size_t length) {
     int64_t t1 = 0;
     memcpy(&t1, data + 1, 8);
     
+    // ESP32側もUnixタイムスタンプ風に調整（millis基準）
     int64_t t2 = millis();
-    int64_t t3 = millis();
+    int64_t t3 = millis() + 1; // 1ms後
     
     uint8_t response[25];
     response[0] = CMD_TIME_SYNC;
@@ -47,7 +48,7 @@ void handleTimeSync(uint8_t* data, size_t length) {
         pResponseCharacteristic->notify();
     }
     
-    Serial.printf("Time sync: %lld\n", t1);
+    Serial.printf("Time sync: Web=%lld, ESP32=%lld\n", t1, t2);
 }
 
 void handleMotorCommand(uint8_t* data, size_t length) {
@@ -56,17 +57,16 @@ void handleMotorCommand(uint8_t* data, size_t length) {
     totalCommands++;
     
     uint8_t motorCmd = data[1];
-    int64_t sentAt, executeAt;
+    int64_t sentAt, delayMs;
     uint16_t sequence;
     
     memcpy(&sentAt, data + 2, 8);
-    memcpy(&executeAt, data + 10, 8);
+    memcpy(&delayMs, data + 10, 8);  // 相対遅延時間
     memcpy(&sequence, data + 18, 2);
     
     int64_t receivedAt = millis();
-    int64_t delayMs = executeAt - receivedAt;
     
-    // 簡単な遅延実行
+    // 指定された遅延時間待機
     if (delayMs > 0 && delayMs < 1000) {
         delay(delayMs);
     }
@@ -78,20 +78,20 @@ void handleMotorCommand(uint8_t* data, size_t length) {
     delayMicroseconds(100);
     digitalWrite(MOTOR_PIN, LOW);
     
-    // 応答
-    uint8_t response[20];
+    // 簡単な応答（タイムスタンプなし）
+    uint8_t response[4];
     response[0] = CMD_MOTOR_CMD;
     response[1] = motorCmd;
-    memcpy(response + 2, &receivedAt, 8);
-    memcpy(response + 10, &executedAt, 8);
-    memcpy(response + 18, &sequence, 2);
+    response[2] = sequence & 0xFF;
+    response[3] = (sequence >> 8) & 0xFF;
     
     if (deviceConnected && pResponseCharacteristic) {
-        pResponseCharacteristic->setValue(response, 20);
+        pResponseCharacteristic->setValue(response, 4);
         pResponseCharacteristic->notify();
     }
     
-    Serial.printf("[%d] Motor executed\n", sequence);
+    Serial.printf("[%d] Motor: delay=%lldms, actual=%lldms\n", 
+                  sequence, delayMs, executedAt - receivedAt);
 }
 
 // ===== BLEコールバッククラス =====

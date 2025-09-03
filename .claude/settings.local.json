@@ -10,7 +10,11 @@
       "Bash(winget install:*)",
       "Bash(curl:*)",
       "Bash(powershell:*)",
-      "Bash(./bin/gh.exe:*)"
+      "Bash(./bin/gh.exe:*)",
+      "Read(C:\\git\\claude-filesystem\\slot/**)",
+      "Read(C:\\git\\claude-filesystem\\slot/**)",
+      "Read(C:\\git\\claude-filesystem\\slot/**)",
+      "Read(C:\\git\\claude-filesystem\\slot/**)"
     ],
     "deny": [],
     "ask": []
