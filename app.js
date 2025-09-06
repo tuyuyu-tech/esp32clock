@@ -1,21 +1,20 @@
-class ESP32TimingTester {
+class ESP32PeriodicTester {
     constructor() {
         this.device = null;
         this.commandCharacteristic = null;
         this.responseCharacteristic = null;
         this.responseHandler = null;
-        this.timeOffset = 0;
-        this.lastSyncTime = null;
-        this.isSynced = false;
+        this.isConnected = false;
         this.isTestRunning = false;
-        this.currentTestIndex = 0;
+        this.currentSignalIndex = 0;
         this.testResults = [];
-        this.esp32StartTime = null;
-        this.testSettings = {
-            interval: 500,
-            executionDelay: 50,
-            count: 50
+        this.periodicSettings = {
+            count: 100,
+            period: 75, // 75ms固定
+            maxDeviation: 10 // 最大許容ずれ
         };
+        this.sendTimes = [];
+        this.periodicTimer = null;
         
         this.initializeUI();
         this.initializeChart();
@@ -30,29 +29,23 @@ class ESP32TimingTester {
         // ボタンイベント
         document.getElementById('connectBtn').addEventListener('click', () => this.connect());
         document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
-        document.getElementById('syncTimeBtn').addEventListener('click', () => this.syncTime());
-        document.getElementById('startTestBtn').addEventListener('click', () => this.startTest());
-        document.getElementById('startDirectTestBtn').addEventListener('click', () => this.startDirectTest());
+        document.getElementById('startPeriodicTestBtn').addEventListener('click', () => this.startPeriodicTest());
         document.getElementById('stopTestBtn').addEventListener('click', () => this.stopTest());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearResults());
         document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
         document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
         
         // テスト設定
-        document.getElementById('testInterval').addEventListener('change', (e) => {
-            this.testSettings.interval = parseInt(e.target.value);
-        });
-        document.getElementById('executionDelay').addEventListener('change', (e) => {
-            this.testSettings.executionDelay = parseInt(e.target.value);
-        });
         document.getElementById('testCount').addEventListener('change', (e) => {
-            this.testSettings.count = parseInt(e.target.value);
+            this.periodicSettings.count = parseInt(e.target.value);
+        });
+        document.getElementById('maxDeviation').addEventListener('change', (e) => {
+            this.periodicSettings.maxDeviation = parseInt(e.target.value);
         });
         
         // 初期状態
         this.updateStatus('disconnected', '未接続');
-        this.updateSyncStatus('BLE接続後に同期開始');
-        document.getElementById('syncTimeBtn').disabled = true;
+        this.log('ESP32周期精度テスター - 75ms周期測定', 'info');
     }
     
     initializeChart() {
@@ -62,21 +55,23 @@ class ESP32TimingTester {
             data: {
                 labels: [],
                 datasets: [{
-                    label: '送信遅延 (ms)',
+                    label: '75ms周期からのずれ (ms)',
                     data: [],
                     borderColor: '#3498db',
                     backgroundColor: 'rgba(52, 152, 219, 0.1)',
                     borderWidth: 2,
                     tension: 0.4,
-                    pointRadius: 2
+                    pointRadius: 3,
+                    fill: false
                 }, {
-                    label: '遅延誤差 (ms)',
+                    label: '許容範囲外の値 (ms)',
                     data: [],
                     borderColor: '#e74c3c',
-                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    backgroundColor: 'rgba(231, 76, 60, 0.2)',
                     borderWidth: 2,
                     tension: 0.4,
-                    pointRadius: 2
+                    pointRadius: 2,
+                    fill: true
                 }]
             },
             options: {
@@ -84,23 +79,25 @@ class ESP32TimingTester {
                 maintainAspectRatio: false,
                 scales: {
                     y: {
-                        beginAtZero: true,
                         title: {
                             display: true,
-                            text: '誤差 (ms)'
+                            text: 'ずれ (ms)'
                         }
                     },
                     x: {
                         title: {
                             display: true,
-                            text: 'サンプル番号'
+                            text: '信号番号'
                         }
                     }
                 },
                 plugins: {
                     title: {
                         display: true,
-                        text: 'リアルタイム送信遅延と誤差'
+                        text: '75ms周期精度測定結果'
+                    },
+                    legend: {
+                        display: true
                     }
                 }
             }
@@ -132,13 +129,14 @@ class ESP32TimingTester {
                 this.onResponseReceived(event);
             });
             
+            this.isConnected = true;
             this.updateStatus('connected', '接続済み');
             this.log(`デバイス "${this.device.name}" に接続しました`, 'success');
             
             // UI更新
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('disconnectBtn').disabled = false;
-            document.getElementById('syncTimeBtn').disabled = false;
+            document.getElementById('startPeriodicTestBtn').disabled = false;
             
         } catch (error) {
             this.updateStatus('disconnected', '接続失敗');
@@ -158,13 +156,12 @@ class ESP32TimingTester {
         this.commandCharacteristic = null;
         this.responseCharacteristic = null;
         this.responseHandler = null;
+        this.isConnected = false;
         
         // UI更新
         document.getElementById('connectBtn').disabled = false;
         document.getElementById('disconnectBtn').disabled = true;
-        document.getElementById('syncTimeBtn').disabled = true;
-        document.getElementById('startTestBtn').disabled = true;
-        document.getElementById('startDirectTestBtn').disabled = true;
+        document.getElementById('startPeriodicTestBtn').disabled = true;
         
         this.updateStatus('disconnected', '未接続');
         this.log('デバイスから切断されました', 'info');
@@ -174,56 +171,153 @@ class ESP32TimingTester {
         }
     }
     
-    async syncTime() {
-        if (!this.commandCharacteristic) return;
+    async startPeriodicTest() {
+        if (!this.isConnected || this.isTestRunning) return;
         
         try {
-            this.updateSyncStatus('BLE時刻同期中...');
-            this.log('BLE時刻同期を開始します', 'info');
+            this.isTestRunning = true;
+            this.currentSignalIndex = 0;
+            this.sendTimes = [];
+            this.testResults = [];
             
-            const samples = [];
-            const numSamples = 10;
+            document.getElementById('startPeriodicTestBtn').disabled = true;
+            document.getElementById('stopTestBtn').disabled = false;
             
-            for (let i = 0; i < numSamples; i++) {
-                const sample = await this.performTimeSync();
-                if (sample && sample.roundTrip < 50) { // 50ms以下の良好なサンプル
-                    samples.push(sample);
-                }
-                await this.sleep(100);
-            }
+            this.log(`75ms周期テスト開始: ${this.periodicSettings.count}回送信`, 'info');
             
-            if (samples.length < 3) {
-                throw new Error('十分なサンプルが取得できませんでした');
-            }
+            // ESP32にテスト開始を通知
+            await this.sendTestStartCommand();
             
-            // オフセットを計算して設定
-            const offsets = samples.map(s => s.offset);
-            this.timeOffset = offsets.reduce((a, b) => a + b, 0) / offsets.length;
-            
-            // 遅延統計を計算
-            const delays = samples.map(s => s.delay);
-            const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
-            const maxDelay = Math.max(...delays);
-            const minDelay = Math.min(...delays);
-            
-            // 同期完了
-            this.isSynced = true;
-            this.lastSyncTime = new Date();
-            
-            this.updateSyncStatus('BLE同期完了');
-            document.getElementById('startTestBtn').disabled = false;
-            document.getElementById('startDirectTestBtn').disabled = false;
-            document.getElementById('timeOffset').textContent = this.timeOffset.toFixed(2);
-            document.getElementById('lastSync').textContent = this.lastSyncTime.toLocaleTimeString();
-            
-            this.log(`BLE時刻同期完了: オフセット ${this.timeOffset.toFixed(2)}ms`, 'success');
-            this.log(`送信遅延: 平均 ${avgDelay.toFixed(2)}ms (${minDelay.toFixed(2)}-${maxDelay.toFixed(2)}ms)`, 'info');
-            this.log(`測定サンプル: ${samples.length}/${numSamples}`, 'info');
+            // 最初の信号をすぐに送信
+            this.sendFirstSignal();
             
         } catch (error) {
-            this.updateSyncStatus('BLE同期失敗');
-            this.log(`BLE同期エラー: ${error.message}`, 'error');
+            this.log(`テスト開始エラー: ${error.message}`, 'error');
+            this.stopTest();
         }
+    }
+    
+    async sendTestStartCommand() {
+        const command = new ArrayBuffer(5);
+        const view = new DataView(command);
+        view.setUint8(0, 0x03); // PERIODIC_TEST_START
+        view.setUint16(1, this.periodicSettings.count, true);
+        view.setUint16(3, this.periodicSettings.period, true);
+        
+        await this.commandCharacteristic.writeValue(command);
+    }
+    
+    async sendFirstSignal() {
+        this.testStartTime = performance.now();
+        await this.sendPeriodicSignal();
+        
+        // 次の信号をスケジュール
+        this.scheduleNextSignal();
+    }
+    
+    async sendPeriodicSignal() {
+        const currentTime = Date.now();
+        const sequence = this.currentSignalIndex;
+        
+        this.sendTimes.push({
+            sequence: sequence,
+            sendTime: currentTime,
+            performanceTime: performance.now()
+        });
+        
+        const command = new ArrayBuffer(11);
+        const view = new DataView(command);
+        view.setUint8(0, 0x04); // PERIODIC_SIGNAL
+        view.setUint16(1, sequence, true);
+        view.setBigUint64(3, BigInt(currentTime), true);
+        
+        await this.commandCharacteristic.writeValue(command);
+        
+        this.currentSignalIndex++;
+        this.updateProgress();
+        
+        this.log(`信号送信 [${sequence + 1}/${this.periodicSettings.count}]`, 'info');
+    }
+    
+    scheduleNextSignal() {
+        if (!this.isTestRunning || this.currentSignalIndex >= this.periodicSettings.count) {
+            // 全信号送信完了
+            this.finishSending();
+            return;
+        }
+        
+        // 次の送信タイミングを計算
+        const nextSendTime = this.testStartTime + (this.currentSignalIndex * this.periodicSettings.period);
+        const currentTime = performance.now();
+        const delay = Math.max(0, nextSendTime - currentTime);
+        
+        this.periodicTimer = setTimeout(() => {
+            if (this.isTestRunning) {
+                this.sendPeriodicSignal();
+                this.scheduleNextSignal();
+            }
+        }, delay);
+    }
+    
+    async finishSending() {
+        this.log('全信号送信完了 - 結果データ取得中...', 'info');
+        
+        // 少し待ってからESP32に結果を要求
+        await this.sleep(100);
+        await this.getResults();
+    }
+    
+    async getResults() {
+        return new Promise((resolve) => {
+            // 結果取得コマンド
+            const command = new ArrayBuffer(1);
+            const view = new DataView(command);
+            view.setUint8(0, 0x05); // GET_RESULTS
+            
+            let responseTimer = setTimeout(() => {
+                this.responseHandler = null;
+                this.log('結果データ取得タイムアウト', 'error');
+                resolve();
+            }, 5000);
+            
+            this.responseHandler = (data) => {
+                clearTimeout(responseTimer);
+                this.processResults(data);
+                resolve();
+            };
+            
+            this.commandCharacteristic.writeValue(command);
+        });
+    }
+    
+    processResults(data) {
+        if (data.byteLength < 2) {
+            this.log('結果データが不正です', 'error');
+            return;
+        }
+        
+        const view = new DataView(data);
+        const numResults = view.getUint16(0, true);
+        
+        if (data.byteLength < 2 + numResults * 2) {
+            this.log('結果データサイズが不正です', 'error');
+            return;
+        }
+        
+        this.testResults = [];
+        for (let i = 0; i < numResults; i++) {
+            const deviation = view.getInt16(2 + i * 2, true);
+            this.testResults.push({
+                sequence: i,
+                deviation: deviation,
+                withinTolerance: Math.abs(deviation) <= this.periodicSettings.maxDeviation
+            });
+        }
+        
+        this.log(`結果データ取得完了: ${this.testResults.length}サンプル`, 'success');
+        this.updateStats();
+        this.updateChart();
+        this.stopTest();
     }
     
     async performTimeSync() {
@@ -469,18 +563,25 @@ class ESP32TimingTester {
         this.isTestRunning = false;
         this.responseHandler = null;
         
-        document.getElementById('startTestBtn').disabled = !this.isSynced;
-        document.getElementById('startDirectTestBtn').disabled = !this.isSynced;
+        // タイマーをクリア
+        if (this.periodicTimer) {
+            clearTimeout(this.periodicTimer);
+            this.periodicTimer = null;
+        }
+        
+        document.getElementById('startPeriodicTestBtn').disabled = !this.isConnected;
         document.getElementById('stopTestBtn').disabled = true;
         
         if (this.testResults.length > 0) {
             this.log(`テスト完了: ${this.testResults.length}サンプル`, 'success');
+        } else if (this.currentSignalIndex > 0) {
+            this.log(`テスト中断: ${this.currentSignalIndex}信号送信済み`, 'info');
         }
     }
     
     updateProgress() {
-        const progress = Math.round((this.currentTestIndex / this.testSettings.count) * 100);
-        document.getElementById('progress').textContent = `${this.currentTestIndex}/${this.testSettings.count}`;
+        const progress = Math.round((this.currentSignalIndex / this.periodicSettings.count) * 100);
+        document.getElementById('progress').textContent = `${this.currentSignalIndex}/${this.periodicSettings.count}`;
         document.getElementById('progressFill').style.width = `${progress}%`;
     }
     
@@ -488,58 +589,74 @@ class ESP32TimingTester {
         const results = this.testResults;
         if (results.length === 0) return;
         
-        const transmissionDelays = results.map(r => r.transmissionDelay);
-        const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / results.length;
+        const deviations = results.map(r => r.deviation);
+        const absDeviations = deviations.map(d => Math.abs(d));
         
-        // 送信遅延誤差を計算（平均からの差の絶対値）
-        const delayErrors = transmissionDelays.map(delay => Math.abs(avgDelay - delay));
-        const avgDelayError = delayErrors.reduce((a, b) => a + b, 0) / delayErrors.length;
-        const maxDelayError = Math.max(...delayErrors);
-        const within5ms = delayErrors.filter(error => error <= 5).length;
-        const within5msPercent = (within5ms / delayErrors.length) * 100;
+        // 統計計算
+        const avgDeviation = deviations.reduce((a, b) => a + b, 0) / results.length;
+        const avgAbsDeviation = absDeviations.reduce((a, b) => a + b, 0) / results.length;
+        const maxDeviation = Math.max(...absDeviations);
+        const withinTolerance = results.filter(r => r.withinTolerance).length;
+        const tolerancePercent = (withinTolerance / results.length) * 100;
         
+        // 標準偏差計算
+        const variance = deviations.reduce((sum, d) => sum + Math.pow(d - avgDeviation, 2), 0) / results.length;
+        const stdDeviation = Math.sqrt(variance);
+        
+        // UI更新
         document.getElementById('sampleCount').textContent = results.length;
-        document.getElementById('avgDelay').textContent = `${avgDelay.toFixed(2)}ms`;
-        document.getElementById('avgError').textContent = `${avgDelayError.toFixed(2)}ms`;
-        document.getElementById('maxError').textContent = `${maxDelayError.toFixed(2)}ms`;
-        document.getElementById('within5ms').textContent = `${within5msPercent.toFixed(1)}%`;
+        document.getElementById('avgDeviation').textContent = `${avgDeviation.toFixed(2)}ms`;
+        document.getElementById('avgAbsDeviation').textContent = `${avgAbsDeviation.toFixed(2)}ms`;
+        document.getElementById('maxDeviation').textContent = `${maxDeviation.toFixed(2)}ms`;
+        document.getElementById('stdDeviation').textContent = `${stdDeviation.toFixed(2)}ms`;
+        document.getElementById('withinTolerance').textContent = `${tolerancePercent.toFixed(1)}%`;
+        
+        // 最新の結果を表示
+        if (results.length > 0) {
+            const lastResult = results[results.length - 1];
+            document.getElementById('currentDeviation').textContent = `${lastResult.deviation.toFixed(2)}ms`;
+        }
     }
     
-    addToChart(transmissionDelay) {
+    updateChart() {
         const results = this.testResults;
-        const transmissionDelays = results.map(r => r.transmissionDelay);
-        const avgDelay = transmissionDelays.reduce((a, b) => a + b, 0) / results.length;
+        if (results.length === 0) return;
         
-        // 誤差 = 平均送信遅延 - 今回の送信遅延
-        const delayError = avgDelay - transmissionDelay;
+        // チャートデータをクリア
+        this.chart.data.labels = [];
+        this.chart.data.datasets[0].data = [];
+        this.chart.data.datasets[1].data = [];
         
-        this.chart.data.labels.push(this.testResults.length);
-        this.chart.data.datasets[0].data.push(transmissionDelay); // 送信遅延
-        this.chart.data.datasets[1].data.push(delayError);        // 遅延誤差
+        // 新しいデータを追加
+        results.forEach((result, index) => {
+            this.chart.data.labels.push(index + 1);
+            this.chart.data.datasets[0].data.push(result.deviation);
+            
+            // 許容範囲の表示用（正の値で許容範囲内なら0、範囲外なら偏差の絶対値）
+            const toleranceIndicator = result.withinTolerance ? 0 : Math.abs(result.deviation);
+            this.chart.data.datasets[1].data.push(toleranceIndicator);
+        });
         
-        // 最新50回分のみ表示
-        if (this.chart.data.labels.length > 50) {
-            this.chart.data.labels.shift();
-            this.chart.data.datasets[0].data.shift();
-            this.chart.data.datasets[1].data.shift();
-        }
-        
-        this.chart.update('none');
+        this.chart.update();
     }
     
     clearResults() {
         this.testResults = [];
+        this.sendTimes = [];
+        this.currentSignalIndex = 0;
+        
         this.chart.data.labels = [];
         this.chart.data.datasets[0].data = [];
         this.chart.data.datasets[1].data = [];
         this.chart.update();
         
         document.getElementById('sampleCount').textContent = '0';
-        document.getElementById('avgDelay').textContent = '--';
-        document.getElementById('avgError').textContent = '--';
-        document.getElementById('maxError').textContent = '--';
-        document.getElementById('within5ms').textContent = '--';
-        document.getElementById('currentError').textContent = '--';
+        document.getElementById('avgDeviation').textContent = '--';
+        document.getElementById('avgAbsDeviation').textContent = '--';
+        document.getElementById('maxDeviation').textContent = '--';
+        document.getElementById('stdDeviation').textContent = '--';
+        document.getElementById('withinTolerance').textContent = '--';
+        document.getElementById('currentDeviation').textContent = '--';
         
         document.getElementById('progress').textContent = '0/0';
         document.getElementById('progressFill').style.width = '0%';
@@ -553,17 +670,15 @@ class ESP32TimingTester {
             return;
         }
         
-        const headers = ['Sequence', 'Send Time', 'ESP32 Received', 'ESP32 Executed', 'Response Time', 'Transmission Delay', 'Execution Error'];
+        const headers = ['Sequence', 'Deviation_ms', 'Within_Tolerance', 'Expected_Time', 'Actual_Offset'];
         const csvContent = [
             headers.join(','),
-            ...this.testResults.map(result => [
-                result.sequence,
-                result.sendTime,
-                result.esp32ReceivedAt,
-                result.esp32ExecutedAt,
-                result.responseTime,
-                result.transmissionDelay.toFixed(3),
-                result.rawExecutionError.toFixed(3)
+            ...this.testResults.map((result, index) => [
+                result.sequence + 1,
+                result.deviation.toFixed(3),
+                result.withinTolerance ? 'YES' : 'NO',
+                (index * this.periodicSettings.period).toFixed(0), // 期待タイミング
+                ((index * this.periodicSettings.period) + result.deviation).toFixed(3) // 実際のオフセット
             ].join(','))
         ].join('\n');
         
@@ -571,7 +686,7 @@ class ESP32TimingTester {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `esp32_timing_test_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.download = `esp32_periodic_test_75ms_${new Date().toISOString().slice(0, 10)}.csv`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -617,5 +732,5 @@ class ESP32TimingTester {
 
 // アプリケーション開始
 document.addEventListener('DOMContentLoaded', () => {
-    new ESP32TimingTester();
+    new ESP32PeriodicTester();
 });

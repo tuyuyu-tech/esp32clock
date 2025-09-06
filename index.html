@@ -10,8 +10,8 @@
 <body>
     <div class="container">
         <header>
-            <h1>ESP32 BLE タイミング精度テスター</h1>
-            <p>モーター制御の時刻同期精度を測定します（目標: ±5ms以内）</p>
+            <h1>ESP32 BLE 75ms周期精度テスター</h1>
+            <p>ESP32の75ms固定周期信号受信精度を測定します</p>
         </header>
 
         <div class="control-panel">
@@ -20,44 +20,27 @@
                 <button id="connectBtn" class="btn primary">ESP32に接続</button>
                 <button id="disconnectBtn" class="btn secondary" disabled>切断</button>
             </div>
-            
-            <div class="sync-section">
-                <h3>時刻同期</h3>
-                <div class="sync-controls">
-                    <button id="syncTimeBtn" class="btn primary">BLE時刻同期</button>
-                    <span id="syncStatus">BLE接続後に同期開始</span>
-                </div>
-                <div class="sync-info">
-                    <span>同期オフセット: <span id="timeOffset">--</span>ms</span>
-                    <span>最終同期: <span id="lastSync">--</span></span>
-                </div>
-            </div>
 
             <div class="test-section">
-                <h3>タイミングテスト</h3>
+                <h3>75ms周期精度テスト</h3>
                 <div class="test-controls">
-                    <label>テスト間隔: 
-                        <select id="testInterval">
-                            <option value="100">100ms</option>
-                            <option value="200">200ms</option>
-                            <option value="500">500ms</option>
-                            <option value="1000">1000ms</option>
+                    <label>送信周期: 
+                        <input type="text" value="75ms" readonly>
+                    </label>
+                    <label>最大許容ずれ: 
+                        <select id="maxDeviation">
+                            <option value="5">±5ms</option>
+                            <option value="10" selected>±10ms</option>
+                            <option value="15">±15ms</option>
+                            <option value="20">±20ms</option>
                         </select>
                     </label>
-                    <label>実行遅延: 
-                        <select id="executionDelay">
-                            <option value="50" selected>50ms</option>
-                            <option value="100">100ms</option>
-                            <option value="200">200ms</option>
-                        </select>
-                    </label>
-                    <label>テスト回数: 
-                        <input type="number" id="testCount" value="50" min="1" max="1000">
+                    <label>送信回数: 
+                        <input type="number" id="testCount" value="100" min="10" max="1000">
                     </label>
                 </div>
                 <div class="test-buttons">
-                    <button id="startTestBtn" class="btn primary" disabled>遅延テスト開始</button>
-                    <button id="startDirectTestBtn" class="btn primary" disabled>即送信テスト開始</button>
+                    <button id="startPeriodicTestBtn" class="btn primary" disabled>75ms周期テスト開始</button>
                     <button id="stopTestBtn" class="btn danger" disabled>停止</button>
                     <button id="clearBtn" class="btn secondary">クリア</button>
                 </div>
@@ -79,24 +62,28 @@
                         <span id="sampleCount">0</span>
                     </div>
                     <div class="stat-item">
-                        <label>平均送信遅延</label>
-                        <span id="avgDelay">--</span>
+                        <label>平均ずれ</label>
+                        <span id="avgDeviation">--</span>
                     </div>
                     <div class="stat-item">
-                        <label>平均実行誤差</label>
-                        <span id="avgError">--</span>
+                        <label>平均絶対ずれ</label>
+                        <span id="avgAbsDeviation">--</span>
                     </div>
                     <div class="stat-item">
-                        <label>最大誤差</label>
-                        <span id="maxError">--</span>
+                        <label>最大ずれ</label>
+                        <span id="maxDeviation">--</span>
                     </div>
                     <div class="stat-item">
-                        <label>5ms以内の割合</label>
-                        <span id="within5ms">--</span>
+                        <label>標準偏差</label>
+                        <span id="stdDeviation">--</span>
                     </div>
                     <div class="stat-item">
-                        <label>現在の誤差</label>
-                        <span id="currentError" class="highlight">--</span>
+                        <label>許容範囲内</label>
+                        <span id="withinTolerance">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <label>現在のずれ</label>
+                        <span id="currentDeviation" class="highlight">--</span>
                     </div>
                 </div>
                 <button id="exportBtn" class="btn secondary">CSV エクスポート</button>
@@ -108,7 +95,7 @@
             </div>
 
             <div class="chart-panel">
-                <h3>リアルタイム誤差グラフ</h3>
+                <h3>75ms周期精度測定グラフ</h3>
                 <canvas id="errorChart" width="400" height="200"></canvas>
             </div>
         </div>

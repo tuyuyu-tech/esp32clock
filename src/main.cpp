@@ -15,8 +15,15 @@
 #define LED_PIN 2
 
 // プロトコル定義
-#define CMD_TIME_SYNC  0x01
-#define CMD_MOTOR_CMD  0x02
+#define CMD_TIME_SYNC           0x01
+#define CMD_MOTOR_CMD           0x02
+#define CMD_PERIODIC_TEST_START 0x03
+#define CMD_PERIODIC_SIGNAL     0x04
+#define CMD_GET_RESULTS         0x05
+
+// 75ms周期測定用設定
+#define MAX_PERIODIC_SAMPLES 1000
+#define EXPECTED_PERIOD_MS   75
 
 // BLE変数
 BLEServer* pServer = nullptr;
@@ -47,13 +54,44 @@ struct TimingStats {
     float min_error = 999999;
 } stats;
 
+// 75ms周期測定用
+struct PeriodicTest {
+    bool is_running = false;
+    uint16_t expected_count = 0;
+    uint16_t expected_period = EXPECTED_PERIOD_MS;
+    uint16_t max_deviation = 10;
+    uint16_t sample_count = 0;
+    uint32_t first_signal_time = 0;
+    uint32_t receive_times[MAX_PERIODIC_SAMPLES];
+    int16_t deviations[MAX_PERIODIC_SAMPLES]; // 期待時刻からのずれ (ms)
+    
+    void reset() {
+        is_running = false;
+        sample_count = 0;
+        first_signal_time = 0;
+        memset(receive_times, 0, sizeof(receive_times));
+        memset(deviations, 0, sizeof(deviations));
+    }
+    
+    void start(uint16_t count, uint16_t period) {
+        reset();
+        expected_count = count;
+        expected_period = period;
+        is_running = true;
+    }
+} periodicTest;
+
 // プロトタイプ宣言
 void setupBLE();
 void setupWiFiTime();
 int64_t getCurrentTimeMs();
 void handleTimeSync(uint8_t* data, size_t length);
 void handleMotorCommand(uint8_t* data, size_t length);
+void handlePeriodicTestStart(uint8_t* data, size_t length);
+void handlePeriodicSignal(uint8_t* data, size_t length);
+void handleGetResults(uint8_t* data, size_t length);
 void sendResponse(uint8_t command, uint8_t* data, size_t length);
+void executeMotorControl();
 void IRAM_ATTR timerCallback(void* arg);
 void updateStatistics(float error);
 
@@ -91,6 +129,15 @@ class CommandCallbacks: public BLECharacteristicCallbacks {
                 case CMD_MOTOR_CMD:
                     handleMotorCommand(data, length);
                     break;
+                case CMD_PERIODIC_TEST_START:
+                    handlePeriodicTestStart(data, length);
+                    break;
+                case CMD_PERIODIC_SIGNAL:
+                    handlePeriodicSignal(data, length);
+                    break;
+                case CMD_GET_RESULTS:
+                    handleGetResults(data, length);
+                    break;
                 default:
                     Serial.printf("Unknown command: 0x%02X\n", command);
                     break;
@@ -126,11 +173,15 @@ void setup() {
 }
 
 void loop() {
-    // 接続状態監視のみ
+    // 接続状態監視
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck > 10000) {
         if (deviceConnected) {
-            Serial.printf("Connected. Total commands: %d\n", stats.total_commands);
+            Serial.printf("Connected. Commands: %d, Periodic samples: %d/%d\n", 
+                         stats.total_commands, periodicTest.sample_count, periodicTest.expected_count);
+            if (periodicTest.is_running) {
+                Serial.println("Periodic test in progress...");
+            }
         }
         lastCheck = millis();
     }
@@ -320,4 +371,164 @@ void updateStatistics(float error) {
     if (error < stats.min_error) {
         stats.min_error = error;
     }
+}
+
+void handlePeriodicTestStart(uint8_t* data, size_t length) {
+    if (length < 5) {
+        Serial.println("Invalid periodic test start packet");
+        return;
+    }
+    
+    uint16_t count, period;
+    memcpy(&count, data + 1, 2);
+    memcpy(&period, data + 3, 2);
+    
+    // 範囲チェック
+    if (count > MAX_PERIODIC_SAMPLES) {
+        count = MAX_PERIODIC_SAMPLES;
+    }
+    
+    periodicTest.start(count, period);
+    
+    Serial.printf("Periodic test started: %d signals, %dms period\n", count, period);
+    
+    // 確認応答（オプション）
+    uint8_t response[2];
+    response[0] = 0x01; // 成功
+    response[1] = 0x00;
+    
+    if (deviceConnected && pResponseCharacteristic) {
+        pResponseCharacteristic->setValue(response, 2);
+        pResponseCharacteristic->notify();
+    }
+}
+
+void handlePeriodicSignal(uint8_t* data, size_t length) {
+    if (length < 11) {
+        Serial.println("Invalid periodic signal packet");
+        return;
+    }
+    
+    if (!periodicTest.is_running) {
+        Serial.println("Periodic test not running");
+        return;
+    }
+    
+    if (periodicTest.sample_count >= periodicTest.expected_count) {
+        Serial.println("Periodic test sample limit reached");
+        return;
+    }
+    
+    uint32_t receivedAt = millis();
+    
+    uint16_t sequence;
+    uint64_t sentAt;
+    memcpy(&sequence, data + 1, 2);
+    memcpy(&sentAt, data + 3, 8);
+    
+    // 最初の信号を基準として記録
+    if (periodicTest.sample_count == 0) {
+        periodicTest.first_signal_time = receivedAt;
+        periodicTest.deviations[0] = 0; // 基準信号はずれなし
+        Serial.printf("[%d] First signal received (baseline)\n", sequence);
+    } else {
+        // 期待される受信時刻を計算
+        uint32_t expected_time = periodicTest.first_signal_time + 
+                                (periodicTest.sample_count * periodicTest.expected_period);
+        
+        // ずれを計算（実際の受信時刻 - 期待時刻）
+        int32_t deviation = (int32_t)(receivedAt - expected_time);
+        periodicTest.deviations[periodicTest.sample_count] = (int16_t)deviation;
+        
+        Serial.printf("[%d] Signal received. Expected: %u, Actual: %u, Deviation: %dms\n", 
+                      sequence, expected_time, receivedAt, deviation);
+    }
+    
+    periodicTest.receive_times[periodicTest.sample_count] = receivedAt;
+    periodicTest.sample_count++;
+    
+    // テスト完了チェック
+    if (periodicTest.sample_count >= periodicTest.expected_count) {
+        periodicTest.is_running = false;
+        Serial.printf("Periodic test completed: %d samples collected\n", periodicTest.sample_count);
+    }
+}
+
+void handleGetResults(uint8_t* data, size_t length) {
+    if (periodicTest.sample_count == 0) {
+        Serial.println("No periodic test results available");
+        
+        // 空の応答
+        uint8_t response[2];
+        response[0] = 0x00;
+        response[1] = 0x00;
+        
+        if (deviceConnected && pResponseCharacteristic) {
+            pResponseCharacteristic->setValue(response, 2);
+            pResponseCharacteristic->notify();
+        }
+        return;
+    }
+    
+    // 結果データのサイズ計算
+    uint16_t result_count = periodicTest.sample_count;
+    size_t response_size = 2 + result_count * 2; // ヘッダー2バイト + 各結果2バイト
+    
+    // 最大MTUサイズを考慮してチャンク送信が必要かもしれません
+    // 今回は簡単のため一度に送信
+    if (response_size > 512) { // BLEの実用的な制限
+        result_count = (512 - 2) / 2;
+        response_size = 512;
+    }
+    
+    uint8_t* response = (uint8_t*)malloc(response_size);
+    if (!response) {
+        Serial.println("Failed to allocate response buffer");
+        return;
+    }
+    
+    // ヘッダー（リトルエンディアン形式）
+    response[0] = (result_count >> 0) & 0xFF;
+    response[1] = (result_count >> 8) & 0xFF;
+    
+    // 結果データ（リトルエンディアン形式）
+    for (uint16_t i = 0; i < result_count; i++) {
+        int16_t deviation = periodicTest.deviations[i];
+        response[2 + i * 2 + 0] = (deviation >> 0) & 0xFF;
+        response[2 + i * 2 + 1] = (deviation >> 8) & 0xFF;
+    }
+    
+    // 実際のデータサイズを調整（コマンドバイトは含めない）
+    size_t actual_size = 2 + result_count * 2;
+    
+    pResponseCharacteristic->setValue(response, actual_size);
+    pResponseCharacteristic->notify();
+    
+    Serial.printf("Results sent: %d samples\n", result_count);
+    
+    // 統計表示
+    int32_t total_deviation = 0;
+    int16_t max_abs_deviation = 0;
+    uint16_t within_tolerance = 0;
+    
+    for (uint16_t i = 0; i < result_count; i++) {
+        total_deviation += periodicTest.deviations[i];
+        int16_t abs_dev = abs(periodicTest.deviations[i]);
+        if (abs_dev > max_abs_deviation) {
+            max_abs_deviation = abs_dev;
+        }
+        if (abs_dev <= periodicTest.max_deviation) {
+            within_tolerance++;
+        }
+    }
+    
+    float avg_deviation = (float)total_deviation / result_count;
+    float tolerance_percent = (float)within_tolerance / result_count * 100.0f;
+    
+    Serial.printf("Periodic Test Statistics:\n");
+    Serial.printf("  Average deviation: %.2fms\n", avg_deviation);
+    Serial.printf("  Max deviation: %dms\n", max_abs_deviation);
+    Serial.printf("  Within tolerance: %.1f%%\n", tolerance_percent);
+    
+    free(response);
 }

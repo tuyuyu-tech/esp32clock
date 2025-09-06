@@ -150,6 +150,12 @@ header p {
     font-size: 14px;
 }
 
+.test-controls input[readonly] {
+    background-color: #f8f9fa;
+    color: #666;
+    font-weight: bold;
+}
+
 .test-buttons {
     display: flex;
     gap: 10px;
@@ -200,8 +206,8 @@ header p {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 15px;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
     margin-bottom: 20px;
 }
 
@@ -375,6 +381,6 @@ header p {
     }
     
     .stats-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr 1fr;
     }
 }
