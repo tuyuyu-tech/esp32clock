@@ -69,34 +69,21 @@
         <div class="results-section">
             <div class="stats-panel">
                 <h3>統計情報</h3>
-                <div class="stats-grid">
+                <div class="stats-simple">
+                    <div class="stat-item large">
+                        <label>平均ズレ</label>
+                        <span id="avgDeviation" class="highlight">--</span>
+                    </div>
                     <div class="stat-item">
                         <label>サンプル数</label>
                         <span id="sampleCount">0</span>
                     </div>
-                    <div class="stat-item">
-                        <label>平均ずれ</label>
-                        <span id="avgDeviation">--</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>平均絶対ずれ</label>
-                        <span id="avgAbsDeviation">--</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>最大ずれ</label>
-                        <span id="maxDeviation">--</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>標準偏差</label>
-                        <span id="stdDeviation">--</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>許容範囲内</label>
-                        <span id="withinTolerance">--</span>
-                    </div>
-                    <div class="stat-item">
-                        <label>現在のずれ</label>
-                        <span id="currentDeviation" class="highlight">--</span>
+                </div>
+                
+                <div class="deviation-data">
+                    <h4>ズレデータ (ms)</h4>
+                    <div id="deviationList" class="deviation-display">
+                        測定開始後にデータが表示されます
                     </div>
                 </div>
                 <button id="exportBtn" class="btn secondary">CSV エクスポート</button>

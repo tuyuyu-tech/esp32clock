@@ -14,7 +14,8 @@
       "Read(C:\\git\\claude-filesystem\\slot/**)",
       "Read(C:\\git\\claude-filesystem\\slot/**)",
       "Read(C:\\git\\claude-filesystem\\slot/**)",
-      "Read(C:\\git\\claude-filesystem\\slot/**)"
+      "Read(C:\\git\\claude-filesystem\\slot/**)",
+      "Read(//c/git/claude-filesystem/slot/**)"
     ],
     "deny": [],
     "ask": []

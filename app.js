@@ -660,32 +660,46 @@ class ESP32PeriodicTester {
         if (results.length === 0) return;
         
         const deviations = results.map(r => r.deviation);
-        const absDeviations = deviations.map(d => Math.abs(d));
         
-        // 統計計算
+        // 平均ズレ計算
         const avgDeviation = deviations.reduce((a, b) => a + b, 0) / results.length;
-        const avgAbsDeviation = absDeviations.reduce((a, b) => a + b, 0) / results.length;
-        const maxDeviation = Math.max(...absDeviations);
-        const withinTolerance = results.filter(r => r.withinTolerance).length;
-        const tolerancePercent = (withinTolerance / results.length) * 100;
         
-        // 標準偏差計算
-        const variance = deviations.reduce((sum, d) => sum + Math.pow(d - avgDeviation, 2), 0) / results.length;
-        const stdDeviation = Math.sqrt(variance);
-        
-        // UI更新
+        // UI更新（簡素化）
         document.getElementById('sampleCount').textContent = results.length;
         document.getElementById('avgDeviation').textContent = `${avgDeviation.toFixed(2)}ms`;
-        document.getElementById('avgAbsDeviation').textContent = `${avgAbsDeviation.toFixed(2)}ms`;
-        document.getElementById('maxDeviation').textContent = `${maxDeviation.toFixed(2)}ms`;
-        document.getElementById('stdDeviation').textContent = `${stdDeviation.toFixed(2)}ms`;
-        document.getElementById('withinTolerance').textContent = `${tolerancePercent.toFixed(1)}%`;
         
-        // 最新の結果を表示
-        if (results.length > 0) {
-            const lastResult = results[results.length - 1];
-            document.getElementById('currentDeviation').textContent = `${lastResult.deviation.toFixed(2)}ms`;
-        }
+        // ズレデータ表示更新
+        this.updateDeviationDisplay(deviations);
+    }
+    
+    updateDeviationDisplay(deviations) {
+        const deviationList = document.getElementById('deviationList');
+        deviationList.innerHTML = '';
+        
+        deviations.forEach((deviation, index) => {
+            const item = document.createElement('span');
+            item.className = 'deviation-item';
+            
+            // ズレの値に応じて色分け
+            if (deviation > 0) {
+                item.classList.add('positive');
+                item.textContent = `+${deviation}`;
+            } else if (deviation < 0) {
+                item.classList.add('negative');
+                item.textContent = `${deviation}`;
+            } else {
+                item.classList.add('zero');
+                item.textContent = '0';
+            }
+            
+            // ツールチップでシーケンス番号表示
+            item.title = `信号#${index + 1}: ${deviation}ms`;
+            
+            deviationList.appendChild(item);
+        });
+        
+        // 最新データにスクロール
+        deviationList.scrollTop = deviationList.scrollHeight;
     }
     
     updateChart() {
@@ -720,13 +734,12 @@ class ESP32PeriodicTester {
         this.chart.data.datasets[1].data = [];
         this.chart.update();
         
+        // 簡素化された統計項目のクリア
         document.getElementById('sampleCount').textContent = '0';
         document.getElementById('avgDeviation').textContent = '--';
-        document.getElementById('avgAbsDeviation').textContent = '--';
-        document.getElementById('maxDeviation').textContent = '--';
-        document.getElementById('stdDeviation').textContent = '--';
-        document.getElementById('withinTolerance').textContent = '--';
-        document.getElementById('currentDeviation').textContent = '--';
+        
+        // ズレデータ表示をクリア
+        document.getElementById('deviationList').innerHTML = '測定開始後にデータが表示されます';
         
         document.getElementById('progress').textContent = '0/0';
         document.getElementById('progressFill').style.width = '0%';
