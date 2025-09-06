@@ -217,14 +217,20 @@ void setupBLE() {
     
     pService->start();
     
-    // Advertising開始
+    // Advertising設定
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(false);
-    pAdvertising->setMinPreferred(0x0);
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06); // iPhone compatibility
+    pAdvertising->setMaxPreferred(0x12);
+    
+    // アドバタイジング開始
     BLEDevice::startAdvertising();
     
     Serial.println("BLE Service started");
+    Serial.println("Device name: ESP32-Timer");
+    Serial.println("Advertising UUID: " + String(SERVICE_UUID));
+    Serial.println("Waiting for client connection...");
 }
 
 int64_t getCurrentTimeMs() {

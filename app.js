@@ -43,9 +43,27 @@ class ESP32PeriodicTester {
             this.periodicSettings.maxDeviation = parseInt(e.target.value);
         });
         
-        // 初期状態
+        // 初期状態とWeb Bluetooth対応チェック
         this.updateStatus('disconnected', '未接続');
         this.log('ESP32周期精度テスター - 75ms周期測定', 'info');
+        this.checkWebBluetoothSupport();
+    }
+    
+    checkWebBluetoothSupport() {
+        if (!navigator.bluetooth) {
+            this.log('⚠️ このブラウザはWeb Bluetooth APIに対応していません', 'error');
+            this.log('Chrome, Edge, またはAndroid Chromeブラウザをお使いください', 'error');
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('connectBtn').textContent = '非対応ブラウザ';
+            return false;
+        }
+        
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            this.log('⚠️ HTTPSでない接続です。一部機能が制限される場合があります', 'info');
+        }
+        
+        this.log('✓ Web Bluetooth API 対応ブラウザです', 'success');
+        return true;
     }
     
     initializeChart() {
@@ -106,24 +124,69 @@ class ESP32PeriodicTester {
     
     async connect() {
         try {
+            // Web Bluetooth API対応チェック
+            if (!navigator.bluetooth) {
+                throw new Error('このブラウザはWeb Bluetooth APIに対応していません。Chrome/Edgeブラウザをお使いください。');
+            }
+
+            // HTTPS確認
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                this.log('注意: HTTPS接続が推奨されます', 'info');
+            }
+
             this.updateStatus('connecting', '接続中...');
             this.log('BLEデバイスを検索中...', 'info');
+            this.log('Bluetooth許可ダイアログが表示されたら、ESP32-Timerを選択してください', 'info');
             
-            this.device = await navigator.bluetooth.requestDevice({
-                filters: [{ name: 'ESP32-Timer' }],
-                optionalServices: [ESP32TimingTester.SERVICE_UUID]
-            });
+            // デバイス検索（段階的にフィルター条件を緩和）
+            let requestOptions;
+            
+            try {
+                // 最初は厳密な名前で検索
+                requestOptions = {
+                    filters: [{ name: 'ESP32-Timer' }],
+                    optionalServices: [ESP32PeriodicTester.SERVICE_UUID]
+                };
+                this.device = await navigator.bluetooth.requestDevice(requestOptions);
+            } catch (firstError) {
+                this.log('ESP32-Timer が見つからないため、ESP32で始まるデバイスを検索します...', 'info');
+                
+                try {
+                    // ESP32で始まるデバイスを検索
+                    requestOptions = {
+                        filters: [{ namePrefix: 'ESP32' }],
+                        optionalServices: [ESP32PeriodicTester.SERVICE_UUID]
+                    };
+                    this.device = await navigator.bluetooth.requestDevice(requestOptions);
+                } catch (secondError) {
+                    this.log('ESP32デバイスが見つからないため、すべてのBLEデバイスを表示します...', 'info');
+                    
+                    // すべてのデバイスを表示（最終手段）
+                    requestOptions = {
+                        acceptAllDevices: true,
+                        optionalServices: [ESP32PeriodicTester.SERVICE_UUID]
+                    };
+                    this.device = await navigator.bluetooth.requestDevice(requestOptions);
+                }
+            }
+            
+            this.log(`デバイス "${this.device.name}" を選択しました`, 'info');
             
             this.device.addEventListener('gattserverdisconnected', () => {
                 this.onDisconnected();
             });
             
+            this.log('GATT接続中...', 'info');
             const server = await this.device.gatt.connect();
-            const service = await server.getPrimaryService(ESP32TimingTester.SERVICE_UUID);
             
-            this.commandCharacteristic = await service.getCharacteristic(ESP32TimingTester.COMMAND_CHARACTERISTIC_UUID);
-            this.responseCharacteristic = await service.getCharacteristic(ESP32TimingTester.RESPONSE_CHARACTERISTIC_UUID);
+            this.log('BLEサービス取得中...', 'info');
+            const service = await server.getPrimaryService(ESP32PeriodicTester.SERVICE_UUID);
             
+            this.log('BLE特性取得中...', 'info');
+            this.commandCharacteristic = await service.getCharacteristic(ESP32PeriodicTester.COMMAND_CHARACTERISTIC_UUID);
+            this.responseCharacteristic = await service.getCharacteristic(ESP32PeriodicTester.RESPONSE_CHARACTERISTIC_UUID);
+            
+            this.log('通知設定中...', 'info');
             await this.responseCharacteristic.startNotifications();
             this.responseCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
                 this.onResponseReceived(event);
@@ -131,7 +194,7 @@ class ESP32PeriodicTester {
             
             this.isConnected = true;
             this.updateStatus('connected', '接続済み');
-            this.log(`デバイス "${this.device.name}" に接続しました`, 'success');
+            this.log(`デバイス "${this.device.name}" に接続完了`, 'success');
             
             // UI更新
             document.getElementById('connectBtn').disabled = true;
@@ -140,7 +203,36 @@ class ESP32PeriodicTester {
             
         } catch (error) {
             this.updateStatus('disconnected', '接続失敗');
-            this.log(`接続エラー: ${error.message}`, 'error');
+            
+            // エラーの詳細分類
+            if (error.name === 'NotFoundError') {
+                if (error.message.includes('User cancelled')) {
+                    this.log('デバイス選択がキャンセルされました', 'info');
+                } else {
+                    this.log('デバイスが見つかりませんでした', 'error');
+                    this.log('確認事項:', 'info');
+                    this.log('1. ESP32の電源が入っている', 'info');
+                    this.log('2. ESP32ファームウェアがアップロード済み', 'info');
+                    this.log('3. ESP32がBLEアドバタイジング中（青LED点灯確認）', 'info');
+                    this.log('4. スマホのBluetooth設定でESP32-Timerが見える', 'info');
+                }
+            } else if (error.name === 'SecurityError') {
+                this.log('Bluetooth権限エラー', 'error');
+                this.log('ブラウザ設定でBluetoothを有効にしてください', 'error');
+            } else if (error.name === 'NetworkError') {
+                this.log('Bluetooth接続エラー', 'error');
+                this.log('ESP32がBLE接続可能な範囲内にあることを確認してください', 'error');
+            } else if (error.name === 'NotSupportedError') {
+                this.log('Web Bluetooth API非対応', 'error');
+                this.log('Chrome/Edge/Android Chromeブラウザをお使いください', 'error');
+            } else if (error.name === 'InvalidStateError') {
+                this.log('Bluetooth状態エラー', 'error');
+                this.log('デバイスのBluetoothがオンになっていることを確認してください', 'error');
+            } else {
+                this.log(`接続エラー: ${error.name} - ${error.message}`, 'error');
+            }
+            
+            console.error('BLE接続エラー詳細:', error);
         }
     }
     
