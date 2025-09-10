@@ -458,17 +458,13 @@ class ESP32PeriodicTester {
             return;
         }
         
-        // 次の送信タイミングを計算
-        const nextSendTime = this.testStartTime + (this.currentSignalIndex * this.periodicSettings.period);
-        const currentTime = performance.now();
-        const delay = Math.max(0, nextSendTime - currentTime);
-        
-        this.periodicTimer = setTimeout(() => {
+        // 高精度スケジューリングをオーディオモードでも使用
+        this.scheduleHighPrecisionTimeout(() => {
             if (this.isTestRunning) {
                 this.sendAudioSignal();
                 this.scheduleNextAudioSignal();
             }
-        }, delay);
+        }, this.testStartTime + (this.currentSignalIndex * this.periodicSettings.period));
     }
     
     async finishAudioSending() {
@@ -526,17 +522,45 @@ class ESP32PeriodicTester {
             return;
         }
         
-        // 次の送信タイミングを計算
-        const nextSendTime = this.testStartTime + (this.currentSignalIndex * this.periodicSettings.period);
-        const currentTime = performance.now();
-        const delay = Math.max(0, nextSendTime - currentTime);
-        
-        this.periodicTimer = setTimeout(() => {
+        // 高精度スケジューリングを使用
+        this.scheduleHighPrecisionTimeout(() => {
             if (this.isTestRunning) {
                 this.sendPeriodicSignal();
                 this.scheduleNextSignal();
             }
-        }, delay);
+        }, this.testStartTime + (this.currentSignalIndex * this.periodicSettings.period));
+    }
+    
+    // 高精度タイマースケジューリング
+    scheduleHighPrecisionTimeout(callback, targetTime) {
+        const now = performance.now();
+        const delay = targetTime - now;
+        
+        if (delay <= 0) {
+            callback();
+            return;
+        }
+        
+        if (delay > 4) {
+            // 4ms以上の遅延の場合、4ms手前でsetTimeoutを使用
+            setTimeout(() => {
+                this.scheduleHighPrecisionTimeout(callback, targetTime);
+            }, delay - 4);
+        } else {
+            // 4ms以下の場合、busy-waitで高精度実現
+            const busyWaitUntil = (deadline) => {
+                while (performance.now() < deadline) {
+                    // 空のループでCPUを消費して精密なタイミングを実現
+                }
+                callback();
+            };
+            
+            setTimeout(() => {
+                requestAnimationFrame(() => {
+                    busyWaitUntil(targetTime);
+                });
+            }, Math.max(0, delay - 1));
+        }
     }
     
     async finishSending() {

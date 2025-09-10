@@ -101,6 +101,11 @@ class MyServerCallbacks: public BLEServerCallbacks {
         deviceConnected = true;
         digitalWrite(LED_PIN, HIGH);
         Serial.println("BLE Client Connected");
+        
+        // BLE接続パラメータを最適化（最小遅延のため）
+        // 接続間隔: 7.5ms (最小値)、遅延: 0、タイムアウト: 2秒
+        pServer->updateConnParams(pServer->getConnId(), 6, 6, 0, 200);
+        Serial.println("BLE connection parameters optimized for low latency");
     }
     
     void onDisconnect(BLEServer* pServer) {
@@ -438,16 +443,16 @@ void handlePeriodicSignal(uint8_t* data, size_t length) {
         periodicTest.deviations[0] = 0; // 基準信号はずれなし
         Serial.printf("[%d] First signal received (baseline at %u ms)\n", sequence, receivedAt);
     } else {
-        // 直前の信号から75ms後の期待時刻を計算
-        uint32_t previous_time = periodicTest.receive_times[periodicTest.sample_count - 1];
-        uint32_t expected_time = previous_time + periodicTest.expected_period;
+        // 絶対時間での期待時刻を計算（累積誤差回避）
+        uint32_t expected_time = periodicTest.first_signal_time + (periodicTest.sample_count * periodicTest.expected_period);
         
         // ずれを計算（実際の受信時刻 - 期待時刻）
         int32_t deviation = (int32_t)(receivedAt - expected_time);
         periodicTest.deviations[periodicTest.sample_count] = (int16_t)deviation;
         
-        Serial.printf("[%d] Signal received. Previous: %u, Expected: %u (+%dms), Actual: %u, Deviation: %dms\n", 
-                      sequence, previous_time, expected_time, periodicTest.expected_period, receivedAt, deviation);
+        Serial.printf("[%d] Signal received. Baseline: %u, Expected: %u (+%dms), Actual: %u, Deviation: %dms\n", 
+                      sequence, periodicTest.first_signal_time, expected_time, 
+                      periodicTest.sample_count * periodicTest.expected_period, receivedAt, deviation);
     }
     
     periodicTest.receive_times[periodicTest.sample_count] = receivedAt;
