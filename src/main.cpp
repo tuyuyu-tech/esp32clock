@@ -13,6 +13,12 @@
 // ピン定義
 #define MOTOR_PIN 26
 #define LED_PIN 2
+#define AUDIO_INPUT_PIN A0  // イヤホンジャック信号入力 (GPIO36)
+
+// オーディオ信号検出設定
+#define AUDIO_THRESHOLD_HIGH 2500  // 信号HIGH検出閾値 (12bit ADC: 0-4095)
+#define AUDIO_THRESHOLD_LOW 1500   // 信号LOW検出閾値
+#define AUDIO_DEBOUNCE_MS 5        // ノイズ除去のためのデバウンス時間
 
 // プロトコル定義
 #define CMD_TIME_SYNC           0x01
@@ -54,6 +60,25 @@ struct TimingStats {
     float min_error = 999999;
 } stats;
 
+// オーディオ信号検出用
+struct AudioSignalDetector {
+    bool is_signal_high = false;
+    uint32_t last_transition_time = 0;
+    uint32_t signal_count = 0;
+    uint32_t first_signal_time = 0;
+    bool monitoring_enabled = true;
+    
+    void reset() {
+        signal_count = 0;
+        first_signal_time = 0;
+        is_signal_high = false;
+        last_transition_time = 0;
+    }
+    
+    void enable() { monitoring_enabled = true; }
+    void disable() { monitoring_enabled = false; }
+} audioDetector;
+
 // 75ms周期測定用
 struct PeriodicTest {
     bool is_running = false;
@@ -84,6 +109,7 @@ struct PeriodicTest {
 // プロトタイプ宣言
 void setupBLE();
 void setupWiFiTime();
+void setupAudioInput();
 int64_t getCurrentTimeMs();
 void handleTimeSync(uint8_t* data, size_t length);
 void handleMotorCommand(uint8_t* data, size_t length);
@@ -94,6 +120,8 @@ void sendResponse(uint8_t command, uint8_t* data, size_t length);
 void executeMotorControl();
 void IRAM_ATTR timerCallback(void* arg);
 void updateStatistics(float error);
+void checkAudioInput();
+void onAudioSignalDetected(uint32_t timestamp);
 
 // BLEコールバック
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -161,6 +189,9 @@ void setup() {
     digitalWrite(MOTOR_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
     
+    // オーディオ入力初期化
+    setupAudioInput();
+    
     // 高精度タイマー初期化
     const esp_timer_create_args_t timerArgs = {
         .callback = &timerCallback,
@@ -178,6 +209,9 @@ void setup() {
 }
 
 void loop() {
+    // オーディオ信号検出
+    checkAudioInput();
+    
     // 接続状態監視
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck > 10000) {
@@ -188,9 +222,12 @@ void loop() {
                 Serial.println("Periodic test in progress...");
             }
         }
+        if (audioDetector.signal_count > 0) {
+            Serial.printf("Audio signals detected: %d\n", audioDetector.signal_count);
+        }
         lastCheck = millis();
     }
-    delay(500);
+    delay(1); // オーディオ監視のため短い遅延
 }
 
 void setupWiFiTime() {
@@ -542,4 +579,61 @@ void handleGetResults(uint8_t* data, size_t length) {
     Serial.printf("  Within tolerance: %.1f%%\n", tolerance_percent);
     
     free(response);
+}
+
+void setupAudioInput() {
+    // ADC1の初期化（GPIO36 = A0）
+    analogReadResolution(12); // 12bit分解能 (0-4095)
+    
+    // オーディオ検出器初期化
+    audioDetector.reset();
+    
+    Serial.println("Audio input initialized on GPIO36 (A0)");
+    Serial.printf("Signal thresholds: HIGH > %d, LOW < %d\n", 
+                  AUDIO_THRESHOLD_HIGH, AUDIO_THRESHOLD_LOW);
+}
+
+void checkAudioInput() {
+    if (!audioDetector.monitoring_enabled) return;
+    
+    uint32_t currentTime = millis();
+    int adcValue = analogRead(AUDIO_INPUT_PIN);
+    
+    // 信号レベル判定
+    bool signalHigh = (adcValue > AUDIO_THRESHOLD_HIGH);
+    bool signalLow = (adcValue < AUDIO_THRESHOLD_LOW);
+    
+    // 状態変化検出（LOWからHIGHへの立ち上がりエッジ）
+    if (!audioDetector.is_signal_high && signalHigh) {
+        // デバウンス処理
+        if (currentTime - audioDetector.last_transition_time >= AUDIO_DEBOUNCE_MS) {
+            audioDetector.is_signal_high = true;
+            audioDetector.last_transition_time = currentTime;
+            onAudioSignalDetected(currentTime);
+        }
+    } else if (audioDetector.is_signal_high && signalLow) {
+        // HIGH→LOW遷移
+        if (currentTime - audioDetector.last_transition_time >= AUDIO_DEBOUNCE_MS) {
+            audioDetector.is_signal_high = false;
+            audioDetector.last_transition_time = currentTime;
+        }
+    }
+}
+
+void onAudioSignalDetected(uint32_t timestamp) {
+    audioDetector.signal_count++;
+    
+    if (audioDetector.signal_count == 1) {
+        // 最初の信号を基準として記録
+        audioDetector.first_signal_time = timestamp;
+        Serial.printf("[AUDIO] Signal #1 detected at %u ms (baseline)\n", timestamp);
+    } else {
+        // 75ms周期からの偏差を計算
+        uint32_t expected_time = audioDetector.first_signal_time + 
+                                ((audioDetector.signal_count - 1) * 75);
+        int32_t deviation = (int32_t)(timestamp - expected_time);
+        
+        Serial.printf("[AUDIO] Signal #%d detected at %u ms (expected: %u ms, deviation: %+d ms)\n", 
+                      audioDetector.signal_count, timestamp, expected_time, deviation);
+    }
 }
