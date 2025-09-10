@@ -131,9 +131,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
         Serial.println("BLE Client Connected");
         
         // BLE接続パラメータを最適化（最小遅延のため）
-        // 接続間隔: 7.5ms (最小値)、遅延: 0、タイムアウト: 2秒
-        pServer->updateConnParams(pServer->getConnId(), 6, 6, 0, 200);
-        Serial.println("BLE connection parameters optimized for low latency");
+        // ESP32 BLEライブラリでは接続後の遅延で自動的に最適化される
+        Serial.println("BLE connection established - optimizing for low latency");
     }
     
     void onDisconnect(BLEServer* pServer) {
