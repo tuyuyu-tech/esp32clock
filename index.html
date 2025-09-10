@@ -28,9 +28,26 @@
         </header>
 
         <div class="control-panel">
+            <div class="connection-method">
+                <h3>接続方法選択</h3>
+                <div class="method-buttons">
+                    <button id="bleMethodBtn" class="btn method-btn active">BLE接続</button>
+                    <button id="audioMethodBtn" class="btn method-btn">イヤホンジャック</button>
+                </div>
+                <div class="method-info">
+                    <div id="bleInfo" class="method-description active">
+                        ESP32とBluetoothで直接通信します。Chrome/Edge推奨。
+                    </div>
+                    <div id="audioInfo" class="method-description">
+                        イヤホンジャックから音声信号を出力します。ESP32に変換回路が必要。
+                    </div>
+                </div>
+            </div>
+            
             <div class="connection-status">
                 <span id="status">未接続</span>
                 <button id="connectBtn" class="btn primary">ESP32に接続</button>
+                <button id="audioConnectBtn" class="btn primary" style="display: none;">オーディオ開始</button>
                 <button id="disconnectBtn" class="btn secondary" disabled>切断</button>
             </div>
 
