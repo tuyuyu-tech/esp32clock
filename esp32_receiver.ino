@@ -66,7 +66,7 @@ void loop() {
     delay(100);
 }
 
-void onDataReceived(const uint8_t *mac, const uint8_t *data, int len) {
+void onDataReceived(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
     if (len != sizeof(signal_packet_t)) {
         Serial.println("Invalid packet size received");
         return;
