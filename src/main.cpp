@@ -4,6 +4,9 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <esp_timer.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
 
 // BLE UUID定義 (Web側と合わせる)
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
@@ -38,6 +41,14 @@ BLECharacteristic* pCommandCharacteristic = nullptr;
 BLECharacteristic* pResponseCharacteristic = nullptr;
 bool deviceConnected = false;
 
+// WiFi & HTTP変数
+WebServer httpServer(80);
+const char* wifi_ssid = "ESP32-Timer-WiFi";
+const char* wifi_password = "12345678";
+IPAddress wifi_ip(192, 168, 4, 1);
+IPAddress wifi_gateway(192, 168, 4, 1);
+IPAddress wifi_subnet(255, 255, 255, 0);
+
 // タイマー関連
 esp_timer_handle_t precisionTimer = nullptr;
 bool motorPending = false;
@@ -68,11 +79,17 @@ struct AudioSignalDetector {
     uint32_t first_signal_time = 0;
     bool monitoring_enabled = true;
     
+    // 実際の測定データ保存用
+    uint32_t timestamps[MAX_PERIODIC_SAMPLES];
+    int16_t deviations[MAX_PERIODIC_SAMPLES];
+    
     void reset() {
         signal_count = 0;
         first_signal_time = 0;
         is_signal_high = false;
         last_transition_time = 0;
+        memset(timestamps, 0, sizeof(timestamps));
+        memset(deviations, 0, sizeof(deviations));
     }
     
     void enable() { monitoring_enabled = true; }
@@ -108,6 +125,8 @@ struct PeriodicTest {
 
 // プロトタイプ宣言
 void setupBLE();
+void setupWiFiAP();
+void setupHTTPServer();
 void setupWiFiTime();
 void setupAudioInput();
 int64_t getCurrentTimeMs();
@@ -122,6 +141,8 @@ void IRAM_ATTR timerCallback(void* arg);
 void updateStatistics(float error);
 void checkAudioInput();
 void onAudioSignalDetected(uint32_t timestamp);
+void handleHTTPCORS();
+void handleAudioResults();
 
 // BLEコールバック
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -201,6 +222,12 @@ void setup() {
     // WiFi時刻同期
     setupWiFiTime();
     
+    // WiFi AP初期化
+    setupWiFiAP();
+    
+    // HTTP Server初期化
+    setupHTTPServer();
+    
     // BLE初期化
     setupBLE();
     
@@ -208,6 +235,9 @@ void setup() {
 }
 
 void loop() {
+    // HTTP server処理
+    httpServer.handleClient();
+    
     // オーディオ信号検出
     checkAudioInput();
     
@@ -215,7 +245,7 @@ void loop() {
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck > 10000) {
         if (deviceConnected) {
-            Serial.printf("Connected. Commands: %d, Periodic samples: %d/%d\n", 
+            Serial.printf("BLE Connected. Commands: %d, Periodic samples: %d/%d\n", 
                          stats.total_commands, periodicTest.sample_count, periodicTest.expected_count);
             if (periodicTest.is_running) {
                 Serial.println("Periodic test in progress...");
@@ -224,6 +254,7 @@ void loop() {
         if (audioDetector.signal_count > 0) {
             Serial.printf("Audio signals detected: %d\n", audioDetector.signal_count);
         }
+        Serial.printf("WiFi AP: %s, IP: %s\n", wifi_ssid, WiFi.softAPIP().toString().c_str());
         lastCheck = millis();
     }
     delay(1); // オーディオ監視のため短い遅延
@@ -620,19 +651,109 @@ void checkAudioInput() {
 }
 
 void onAudioSignalDetected(uint32_t timestamp) {
-    audioDetector.signal_count++;
+    if (audioDetector.signal_count >= MAX_PERIODIC_SAMPLES) {
+        Serial.println("Audio detector buffer full");
+        return;
+    }
     
-    if (audioDetector.signal_count == 1) {
+    // タイムスタンプを保存
+    audioDetector.timestamps[audioDetector.signal_count] = timestamp;
+    
+    if (audioDetector.signal_count == 0) {
         // 最初の信号を基準として記録
         audioDetector.first_signal_time = timestamp;
+        audioDetector.deviations[0] = 0; // 基準は偏差0
         Serial.printf("[AUDIO] Signal #1 detected at %u ms (baseline)\n", timestamp);
     } else {
-        // 75ms周期からの偏差を計算
-        uint32_t expected_time = audioDetector.first_signal_time + 
-                                ((audioDetector.signal_count - 1) * 75);
+        // 75ms周期からの偏差を計算（絶対時間基準）
+        uint32_t expected_time = audioDetector.first_signal_time + (audioDetector.signal_count * 75);
         int32_t deviation = (int32_t)(timestamp - expected_time);
+        audioDetector.deviations[audioDetector.signal_count] = (int16_t)deviation;
         
         Serial.printf("[AUDIO] Signal #%d detected at %u ms (expected: %u ms, deviation: %+d ms)\n", 
-                      audioDetector.signal_count, timestamp, expected_time, deviation);
+                      audioDetector.signal_count + 1, timestamp, expected_time, deviation);
     }
+    
+    audioDetector.signal_count++;
+}
+
+void setupWiFiAP() {
+    // WiFi Access Point設定
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(wifi_ip, wifi_gateway, wifi_subnet);
+    
+    bool result = WiFi.softAP(wifi_ssid, wifi_password);
+    
+    if (result) {
+        Serial.println("WiFi Access Point started successfully");
+        Serial.printf("SSID: %s\n", wifi_ssid);
+        Serial.printf("Password: %s\n", wifi_password);
+        Serial.printf("IP Address: %s\n", WiFi.softAPIP().toString().c_str());
+        Serial.println("Connect your phone to this WiFi network");
+    } else {
+        Serial.println("Failed to start WiFi Access Point");
+    }
+}
+
+void setupHTTPServer() {
+    // CORS対応
+    httpServer.onNotFound([]() {
+        handleHTTPCORS();
+    });
+    
+    // API エンドポイント
+    httpServer.on("/api/audio-results", HTTP_GET, handleAudioResults);
+    httpServer.on("/api/audio-results", HTTP_OPTIONS, handleHTTPCORS);
+    
+    // ルートページ（テスト用）
+    httpServer.on("/", []() {
+        String html = "<html><body>";
+        html += "<h1>ESP32 Timer - Audio Mode</h1>";
+        html += "<p>Audio signals detected: " + String(audioDetector.signal_count) + "</p>";
+        html += "<p>API endpoint: <a href='/api/audio-results'>/api/audio-results</a></p>";
+        html += "</body></html>";
+        
+        httpServer.send(200, "text/html", html);
+    });
+    
+    httpServer.begin();
+    Serial.println("HTTP Server started on port 80");
+}
+
+void handleHTTPCORS() {
+    httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+    httpServer.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    httpServer.send(200, "text/plain", "");
+}
+
+void handleAudioResults() {
+    // CORS headers
+    httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+    httpServer.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpServer.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    
+    // JSON レスポンス作成
+    DynamicJsonDocument doc(2048);
+    
+    doc["signal_count"] = audioDetector.signal_count;
+    doc["first_signal_time"] = audioDetector.first_signal_time;
+    doc["monitoring_enabled"] = audioDetector.monitoring_enabled;
+    
+    // 偏差データ配列
+    JsonArray deviations = doc.createNestedArray("deviations");
+    JsonArray timestamps = doc.createNestedArray("timestamps");
+    
+    if (audioDetector.signal_count > 0) {
+        for (int i = 0; i < audioDetector.signal_count && i < 100; i++) {
+            // 実際の偏差データを使用
+            deviations.add(audioDetector.deviations[i]);
+            timestamps.add(audioDetector.timestamps[i]);
+        }
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    httpServer.send(200, "application/json", response);
 }

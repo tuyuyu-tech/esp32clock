@@ -428,27 +428,74 @@ class ESP32PeriodicTester {
         this.oscillator.stop(this.audioContext.currentTime + duration);
     }
     
-    simulateAudioResult(sequence) {
-        // オーディオモードでは実際の応答がないため、ランダムな偏差を生成
-        // 実際の実装では、ESP32からの結果を別の方法（WiFi、別のBLE接続など）で取得する必要がある
-        const deviation = Math.round((Math.random() - 0.5) * this.periodicSettings.maxDeviation * 2);
-        
-        const result = {
+    async simulateAudioResult(sequence) {
+        // オーディオモードでは WiFi経由でESP32から実際の測定結果を取得
+        // 一時的に結果を追加（後でWiFi API結果で置換）
+        const tempResult = {
             sequence: sequence,
-            deviation: deviation,
-            withinTolerance: Math.abs(deviation) <= this.periodicSettings.maxDeviation
+            deviation: 0, // 一時的に0
+            withinTolerance: true
         };
         
-        this.testResults.push(result);
+        this.testResults.push(tempResult);
         
-        // 統計とチャートを更新（BLEモードと同様）
-        if (this.testResults.length === this.periodicSettings.count || 
-            this.currentSignalIndex >= this.periodicSettings.count) {
+        // 定期的にESP32から実際の結果を取得してUIを更新
+        if (this.testResults.length % 5 === 0 || this.currentSignalIndex >= this.periodicSettings.count) {
             setTimeout(() => {
-                this.updateStats();
-                this.updateChart();
-            }, 200);
+                this.fetchAudioResults();
+            }, 100);
         }
+    }
+    
+    async fetchAudioResults() {
+        try {
+            // ESP32 WiFi APのIPアドレス
+            const esp32_ip = '192.168.4.1';
+            const response = await fetch(`http://${esp32_ip}/api/audio-results`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                timeout: 2000
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // ESP32からの実測データでtestResultsを更新
+            this.updateAudioResults(data);
+            
+        } catch (error) {
+            console.log('WiFi API取得失敗:', error.message);
+            // WiFi接続がない場合はダミーデータを継続使用
+            this.log(`WiFi API取得失敗: ${error.message}（ダミーデータを使用）`, 'info');
+        }
+    }
+    
+    updateAudioResults(data) {
+        if (!data || !data.deviations || data.deviations.length === 0) {
+            return;
+        }
+        
+        // ESP32の実測データでtestResultsを更新
+        this.testResults = [];
+        for (let i = 0; i < data.deviations.length; i++) {
+            const deviation = data.deviations[i];
+            this.testResults.push({
+                sequence: i,
+                deviation: deviation,
+                withinTolerance: Math.abs(deviation) <= this.periodicSettings.maxDeviation
+            });
+        }
+        
+        // UIを更新
+        this.updateStats();
+        this.updateChart();
+        
+        this.log(`ESP32から実測データを取得: ${data.signal_count}サンプル`, 'success');
     }
     
     scheduleNextAudioSignal() {
