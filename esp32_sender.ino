@@ -15,6 +15,9 @@ const int MAX_SIGNALS = 20;
 hw_timer_t *timer = NULL;
 bool test_running = false;
 
+// 前方宣言
+void IRAM_ATTR sendSignal();
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -67,11 +70,10 @@ void startTest() {
     Serial.println("\n=== Test Started ===");
     Serial.println("Sending 20 signals at 750ms intervals...");
     
-    // ハードウェアタイマー設定
-    timer = timerBegin(0, 80, true); // 1MHz (80MHz / 80)
-    timerAttachInterrupt(timer, &sendSignal, true);
-    timerAlarmWrite(timer, 750000, true); // 750ms = 750,000μs
-    timerAlarmEnable(timer);
+    // ハードウェアタイマー設定 (Arduino Core 3.x対応)
+    timer = timerBegin(1000000); // 1MHz
+    timerAttachInterrupt(timer, &sendSignal);
+    timerAlarm(timer, 750000, true, 0); // 750ms = 750,000μs, repeat=true, count=0
     
     // 最初の信号を即座に送信
     sendFirstSignal();
@@ -93,7 +95,7 @@ void sendFirstSignal() {
 
 void IRAM_ATTR sendSignal() {
     if (signal_count >= MAX_SIGNALS) {
-        timerAlarmDisable(timer);
+        timerStop(timer);
         timerEnd(timer);
         test_running = false;
         return;
@@ -111,7 +113,7 @@ void IRAM_ATTR sendSignal() {
     }
 }
 
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
     Serial.printf("Signal #%d: %s\n", 
                   signal_data.sequence + 1, 
                   status == ESP_NOW_SEND_SUCCESS ? "Delivered" : "Failed");
