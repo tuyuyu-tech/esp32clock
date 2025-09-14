@@ -144,7 +144,8 @@ void showStatistics() {
     for (int i = 0; i < received_count; i++) {
         uint32_t relative = receive_times[i] - first_receive_time;
         uint32_t expected = i * 750;
-        int32_t abs_deviation = abs(relative - expected);
+        int32_t deviation = (int32_t)(relative - expected);
+        int32_t abs_deviation = abs(deviation);
         
         if (abs_deviation <= 1) within_1ms++;
         if (abs_deviation <= 5) within_5ms++;
