@@ -25,8 +25,15 @@ void setup() {
     // WiFi Station モード
     WiFi.mode(WIFI_STA);
     
-    // MACアドレス表示
-    Serial.printf("Receiver MAC: %s\n", WiFi.macAddress().c_str());
+    // MACアドレス取得と表示
+    String macAddress = WiFi.macAddress();
+    Serial.printf("Receiver MAC: %s\n", macAddress.c_str());
+    
+    // 配列形式でも表示（コピペ用）
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    Serial.printf("Copy this to sender: {0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X}\n", 
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.println("注意: 送信側でこのMACアドレスを設定してください");
     
     // ESP-NOW初期化
