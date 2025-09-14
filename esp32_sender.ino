@@ -38,10 +38,11 @@ void setup() {
     esp_now_register_send_cb(onDataSent);
     
     // 受信機ピア情報設定
-    esp_now_peer_info_t peerInfo;
+    esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, receiver_mac, 6);
     peerInfo.channel = 0;
     peerInfo.encrypt = false;
+    peerInfo.ifidx = WIFI_IF_STA; // Arduino Core 3.x対応
     
     // ピア追加
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
