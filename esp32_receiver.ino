@@ -1,6 +1,5 @@
 #include <esp_now.h>
 #include <WiFi.h>
-#include <esp_system.h>
 
 // 信号パケット構造体
 typedef struct {
@@ -25,19 +24,30 @@ void setup() {
     
     // WiFi Station モード
     WiFi.mode(WIFI_STA);
-    delay(100); // WiFi初期化待ち
+    WiFi.begin(); // WiFi初期化を強制
+    delay(500);   // 十分な初期化待ち時間
     
-    // 確実なMACアドレス取得方法
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    // MACアドレス取得（複数回トライ）
+    String macAddress = "";
+    for (int i = 0; i < 10; i++) {
+        macAddress = WiFi.macAddress();
+        if (macAddress != "00:00:00:00:00:00" && macAddress.length() > 10) {
+            break; // 有効なMACアドレスを取得
+        }
+        delay(100);
+    }
     
     // MACアドレス表示
-    Serial.printf("Receiver MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    Serial.printf("Receiver MAC: %s\n", macAddress.c_str());
     
-    // 配列形式でも表示（コピペ用）
-    Serial.printf("Copy this to sender: {0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X}\n", 
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    // 配列形式に変換して表示（コピペ用）
+    uint8_t mac[6];
+    if (WiFi.macAddress(mac)) {
+        Serial.printf("Copy this to sender: {0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X}\n", 
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        Serial.println("Failed to get MAC address in byte format");
+    }
     Serial.println("注意: 送信側でこのMACアドレスを設定してください");
     
     // ESP-NOW初期化
