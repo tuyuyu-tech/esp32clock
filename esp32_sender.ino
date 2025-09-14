@@ -57,27 +57,10 @@ void setup() {
 }
 
 void loop() {
-    static unsigned long last_check = 0;
-    
-    // シリアル入力チェック
     if (Serial.available() > 0 && !test_running) {
         Serial.read(); // キー入力をクリア
         startTest();
     }
-    
-    // 自動開始オプション（10秒後）
-    if (!test_running && millis() - last_check > 10000) {
-        Serial.println("Auto-starting test in 5 seconds...");
-        Serial.println("Send any character now to start immediately, or wait for auto-start");
-        delay(5000);
-        
-        if (Serial.available() > 0) {
-            Serial.read();
-        }
-        startTest();
-        last_check = millis();
-    }
-    
     delay(100);
 }
 
