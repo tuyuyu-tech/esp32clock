@@ -1,5 +1,6 @@
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_system.h>
 
 // 信号パケット構造体
 typedef struct {
@@ -24,14 +25,17 @@ void setup() {
     
     // WiFi Station モード
     WiFi.mode(WIFI_STA);
+    delay(100); // WiFi初期化待ち
     
-    // MACアドレス取得と表示
-    String macAddress = WiFi.macAddress();
-    Serial.printf("Receiver MAC: %s\n", macAddress.c_str());
+    // 確実なMACアドレス取得方法
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    
+    // MACアドレス表示
+    Serial.printf("Receiver MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     
     // 配列形式でも表示（コピペ用）
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
     Serial.printf("Copy this to sender: {0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X}\n", 
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.println("注意: 送信側でこのMACアドレスを設定してください");
